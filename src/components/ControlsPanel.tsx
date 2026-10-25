@@ -8,11 +8,36 @@ import {
     SequenceStats,
     CameraControlMode,
     CameraStepAction,
-    WebXrSupportStatus
+    WebXrSupportStatus,
+    BloomPresetType
 } from '../types/dna';
+
+export const BLOOM_PRESETS: Record<Exclude<BloomPresetType, 'custom'>, { label: string; strength: number; threshold: number; desc: string }> = {
+    subtle: {
+        label: 'Subtle (Kristal Halus)',
+        strength: 0.25,
+        threshold: 0.92,
+        desc: 'Pendaran lembut dan tajam hanya pada ikatan hidrogen terkuat.'
+    },
+    cinematic: {
+        label: 'Cinematic (Studio Seimbang)',
+        strength: 0.36,
+        threshold: 0.82,
+        desc: 'Keseimbangan studio antara aksen pendaran dan kejernihan material PBR.'
+    },
+    extreme: {
+        label: 'Extreme (Bioluminesensi Penuh)',
+        strength: 0.75,
+        threshold: 0.54,
+        desc: 'Pendaran intens pada pita fosfat, cincin basa, dan jembatan hidrogen.'
+    }
+};
+
+type PanelTabCategory = 'all' | 'structure' | 'optics' | 'biophysics';
 
 interface ControlsPanelProps {
     isOpen: boolean;
+    isDesktopCollapsed?: boolean;
     onClose: () => void;
     conformation: ConformationType;
     onSelectConformation: (c: ConformationType) => void;
@@ -29,6 +54,12 @@ interface ControlsPanelProps {
     onToggleIons: () => void;
     metricScaleVisible: boolean;
     onToggleMetrics: () => void;
+    bloomEnabled: boolean;
+    bloomStrength: number;
+    bloomThreshold: number;
+    onToggleBloom: () => void;
+    onChangeBloomStrength: (strength: number) => void;
+    onChangeBloomThreshold: (threshold: number) => void;
     assemblyMode: AssemblyModeType;
     onUnzip: () => void;
     onExplode: () => void;
@@ -50,8 +81,24 @@ interface ControlsPanelProps {
     onToggleStereoLensMode: () => void;
 }
 
+const CONFORMATION_SUMMARY: Record<ConformationType, { title: string; detail: string }> = {
+    B: {
+        title: 'B-DNA · Fisiologis Standar',
+        detail: 'Heliks Kanan · 10.5 pb/putaran · Diameter 2.0 nm'
+    },
+    A: {
+        title: 'A-DNA · Terdehidrasi & Hibrida RNA',
+        detail: 'Heliks Kanan · 11.0 pb/putaran · Kemiringan Basa 19°'
+    },
+    Z: {
+        title: 'Z-DNA · Konformasi Zigzag Kidal',
+        detail: 'Heliks Kidal · 12.0 pb/putaran · Diameter 1.8 nm'
+    }
+};
+
 export const ControlsPanel: React.FC<ControlsPanelProps> = ({
     isOpen,
+    isDesktopCollapsed = false,
     onClose,
     conformation,
     onSelectConformation,
@@ -68,6 +115,12 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
     onToggleIons,
     metricScaleVisible,
     onToggleMetrics,
+    bloomEnabled,
+    bloomStrength,
+    bloomThreshold,
+    onToggleBloom,
+    onChangeBloomStrength,
+    onChangeBloomThreshold,
     assemblyMode,
     onUnzip,
     onExplode,
@@ -89,6 +142,7 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
     onToggleStereoLensMode
 }) => {
     const [inputSeq, setInputSeq] = useState(sequence);
+    const [activeSectionTab, setActiveSectionTab] = useState<PanelTabCategory>('all');
 
     const handleApply = (e: React.FormEvent) => {
         e.preventDefault();
@@ -100,471 +154,660 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
         onApplySequence(seq);
     };
 
+    const currentBloomPreset: BloomPresetType = (() => {
+        const eps = 0.015;
+        if (Math.abs(bloomStrength - BLOOM_PRESETS.subtle.strength) < eps && Math.abs(bloomThreshold - BLOOM_PRESETS.subtle.threshold) < eps) {
+            return 'subtle';
+        }
+        if (Math.abs(bloomStrength - BLOOM_PRESETS.cinematic.strength) < eps && Math.abs(bloomThreshold - BLOOM_PRESETS.cinematic.threshold) < eps) {
+            return 'cinematic';
+        }
+        if (Math.abs(bloomStrength - BLOOM_PRESETS.extreme.strength) < eps && Math.abs(bloomThreshold - BLOOM_PRESETS.extreme.threshold) < eps) {
+            return 'extreme';
+        }
+        return 'custom';
+    })();
+
+    const handleSelectBloomPreset = (presetKey: string) => {
+        if (presetKey === 'subtle' || presetKey === 'cinematic' || presetKey === 'extreme') {
+            const preset = BLOOM_PRESETS[presetKey];
+            onChangeBloomStrength(preset.strength);
+            onChangeBloomThreshold(preset.threshold);
+        }
+    };
+
+    const showStructure = activeSectionTab === 'all' || activeSectionTab === 'structure';
+    const showBiophysics = activeSectionTab === 'all' || activeSectionTab === 'biophysics';
+    const showOptics = activeSectionTab === 'all' || activeSectionTab === 'optics';
+
     return (
-        <aside id="controls-panel" className={`glass-panel responsive-drawer ${isOpen ? 'drawer-open' : ''}`}>
+        <aside
+            id="controls-panel"
+            className={`glass-panel responsive-drawer ${isOpen ? 'drawer-open' : ''} ${isDesktopCollapsed ? 'desktop-collapsed' : ''}`}
+        >
             <div className="mobile-drawer-handle"></div>
 
-            <div className="panel-header-flex">
-                <div className="panel-section-title">
-                    <span className="icon">🧬</span> PUSAT KONTROL MOLEKULER
-                </div>
-                <button id="btn-close-controls" className="btn-icon-close" title="Tutup Menu" onClick={onClose}>
-                    &times;
-                </button>
-            </div>
-
-            {/* 1. KONFORMASI ALOTROPIK KRISTALOGRAFI */}
-            <div className="panel-section-title">
-                <span className="icon">🌀</span> BENTUK KONFORMASI ALOTROPIK
-            </div>
-            <p className="section-hint">Standar kristalografi sinar-X (Dickerson &amp; Saenger):</p>
-            <div className="conformation-tabs">
-                <button
-                    className={`conf-tab-btn ${conformation === 'B' ? 'active' : ''}`}
-                    onClick={() => onSelectConformation('B')}
-                    title="B-DNA: Bentuk fisiologis alami seluler"
-                >
-                    <span className="conf-badge">B-DNA</span>
-                    <span className="conf-title">Fisiologis Standar</span>
-                    <span className="conf-sub">Kanan • 10.5 pb • ⌀2.0 nm</span>
-                </button>
-                <button
-                    className={`conf-tab-btn ${conformation === 'A' ? 'active' : ''}`}
-                    onClick={() => onSelectConformation('A')}
-                    title="A-DNA: Terdehidrasi &amp; hibrida DNA-RNA"
-                >
-                    <span className="conf-badge">A-DNA</span>
-                    <span className="conf-title">Kompak Miring</span>
-                    <span className="conf-sub">Kanan • 11.0 pb • Miring 19°</span>
-                </button>
-                <button
-                    className={`conf-tab-btn ${conformation === 'Z' ? 'active' : ''}`}
-                    onClick={() => onSelectConformation('Z')}
-                    title="Z-DNA: Heliks kidal bergantian purin-pirimidin"
-                >
-                    <span className="conf-badge">Z-DNA</span>
-                    <span className="conf-title">Heliks Kidal</span>
-                    <span className="conf-sub">Kidal • 12.0 pb • Zigzag</span>
-                </button>
-            </div>
-
-            <div className="divider"></div>
-
-            {/* 2. MODE REPRESENTASI MOLEKULER */}
-            <div className="panel-section-title">
-                <span className="icon">🔬</span> STANDAR REPRESENTASI ILMIAH
-            </div>
-            <p className="section-hint">Pilih visualisasi setara RCSB PDB &amp; PyMOL:</p>
-            <div className="mode-selector-grid">
-                <button
-                    className={`mode-btn ${renderMode === 'bio' ? 'active' : ''}`}
-                    onClick={() => onSelectRenderMode('bio')}
-                >
-                    <span className="mode-icon">🧪</span>
-                    <div className="mode-info">
-                        <span className="mode-name">Bio-Illustrative</span>
-                        <span className="mode-sub">Cincin Planar Purin-Pirimidin &amp; Pita Ribosa</span>
+            {/* Sticky Panel Header */}
+            <div className="panel-top-header">
+                <div className="panel-header-flex">
+                    <div className="panel-title-wrap">
+                        <span className="panel-kicker">INSTRUMEN PARAMETER</span>
+                        <h2 className="panel-main-title">Kontrol Molekuler</h2>
                     </div>
-                </button>
-                <button
-                    className={`mode-btn ${renderMode === 'cpk' ? 'active' : ''}`}
-                    onClick={() => onSelectRenderMode('cpk')}
-                >
-                    <span className="mode-icon">🔮</span>
-                    <div className="mode-info">
-                        <span className="mode-name">CPK Space-Filling</span>
-                        <span className="mode-sub">Permukaan Atomik Padat (Van der Waals)</span>
-                    </div>
-                </button>
-                <button
-                    className={`mode-btn ${renderMode === 'ballstick' ? 'active' : ''}`}
-                    onClick={() => onSelectRenderMode('ballstick')}
-                >
-                    <span className="mode-icon">⚛️</span>
-                    <div className="mode-info">
-                        <span className="mode-name">Ball &amp; Stick</span>
-                        <span className="mode-sub">Kerangka Ikatan Kimia Kovalen 3D</span>
-                    </div>
-                </button>
-                <button
-                    className={`mode-btn ${renderMode === 'electrostatic' ? 'active' : ''}`}
-                    onClick={() => onSelectRenderMode('electrostatic')}
-                >
-                    <span className="mode-icon">⚡</span>
-                    <div className="mode-info">
-                        <span className="mode-name">Coulombic Surface Map</span>
-                        <span className="mode-sub">Peta Potensial Elektrostatik (- Fosfat vs 0 Basa)</span>
-                    </div>
-                </button>
-            </div>
-
-            <div className="divider"></div>
-
-            {/* 3. FENOMENA & MODIFIKASI GENETIK */}
-            <div className="panel-section-title">
-                <span className="icon">✨</span> FENOMENA &amp; LESI MOLEKULER
-            </div>
-            <p className="section-hint">Simulasi modifikasi epigenetik &amp; kerusakan UV:</p>
-            <div className="condition-selector-grid">
-                <button
-                    className={`condition-btn ${condition === 'normal' ? 'active' : ''}`}
-                    onClick={() => onSelectCondition('normal')}
-                >
-                    <span className="cond-icon">🌿</span>
-                    <div className="cond-info">
-                        <span className="cond-title">Normal (Heliks Utuh)</span>
-                        <span className="cond-sub">Pasangan Chargaff stabil tanpa lesi</span>
-                    </div>
-                </button>
-                <button
-                    className={`condition-btn ${condition === 'methylation' ? 'active' : ''}`}
-                    onClick={() => onSelectCondition('methylation')}
-                >
-                    <span className="cond-icon">🧬</span>
-                    <div className="cond-info">
-                        <span className="cond-title">Metilasi DNA (5-mC)</span>
-                        <span className="cond-sub">Epigenetik: Gugus -CH₃ di Major Groove</span>
-                    </div>
-                </button>
-                <button
-                    className={`condition-btn ${condition === 'thymine_dimer' ? 'active' : ''}`}
-                    onClick={() => onSelectCondition('thymine_dimer')}
-                >
-                    <span className="cond-icon">☀️</span>
-                    <div className="cond-info">
-                        <span className="cond-title">Dimer Timin (Radiasi UV)</span>
-                        <span className="cond-sub">Cincin Siklobutana CPD &amp; Kink 30°</span>
-                    </div>
-                </button>
-                <button
-                    className={`condition-btn ${condition === 'intercalation' ? 'active' : ''}`}
-                    onClick={() => onSelectCondition('intercalation')}
-                >
-                    <span className="cond-icon">💊</span>
-                    <div className="cond-info">
-                        <span className="cond-title">Interkalasi Obat Kanker</span>
-                        <span className="cond-sub">Penyisipan planar &amp; Unwinding heliks</span>
-                    </div>
-                </button>
-            </div>
-
-            <div className="divider"></div>
-
-            {/* 4. SINTESIS SEKUENS NUKLEOTIDA DINAMIS */}
-            <div className="panel-section-title">
-                <span className="icon">⌨️</span> SINTESIS SEKUENS NUKLEOTIDA
-            </div>
-            <p className="section-hint">Rancang rantai basa sendiri (Chargaff komplementer):</p>
-            <form onSubmit={handleApply} className="seq-input-group">
-                <input
-                    type="text"
-                    id="dna-seq-input"
-                    className="seq-input"
-                    value={inputSeq}
-                    onChange={(e) => setInputSeq(e.target.value.toUpperCase())}
-                    maxLength={24}
-                    placeholder="Ketik A, T, G, C..."
-                    spellCheck="false"
-                    autoComplete="off"
-                />
-                <button type="submit" id="btn-apply-seq" className="seq-apply-btn" title="Rakit Ulang Heliks 3D">
-                    Sintesis
-                </button>
-            </form>
-            <div className="seq-preset-chips">
-                <button
-                    type="button"
-                    className={`seq-chip ${sequence === 'ATGCGTACCTACGATC' ? 'active' : ''}`}
-                    onClick={() => handleChipClick('ATGCGTACCTACGATC')}
-                >
-                    Watson-Crick
-                </button>
-                <button
-                    type="button"
-                    className={`seq-chip ${sequence === 'CGCGCGGCCGCGCGCG' ? 'active' : ''}`}
-                    onClick={() => handleChipClick('CGCGCGGCCGCGCGCG')}
-                >
-                    CpG Island (GC)
-                </button>
-                <button
-                    type="button"
-                    className={`seq-chip ${sequence === 'TATAAATATAAATATA' ? 'active' : ''}`}
-                    onClick={() => handleChipClick('TATAAATATAAATATA')}
-                >
-                    TATA Box (AT)
-                </button>
-                <button
-                    type="button"
-                    className={`seq-chip ${sequence === 'CGCGCGCGCGCGCGCG' ? 'active' : ''}`}
-                    onClick={() => handleChipClick('CGCGCGCGCGCGCGCG')}
-                >
-                    poly(dG-dC) Z
-                </button>
-            </div>
-            <div className="seq-stats-badge" id="seq-stats-badge">
-                <div className="seq-stat-item"><span className="stat-lbl">Panjang:</span> <b>{sequenceStats.length} pb</b></div>
-                <div className="seq-stat-item"><span className="stat-lbl">GC:</span> <b>{sequenceStats.gcPercent}</b></div>
-                <div className="seq-stat-item"><span className="stat-lbl">Tₘ:</span> <b>{sequenceStats.tm}</b></div>
-                <div className="seq-stat-item"><span className="stat-lbl">Ikatan H:</span> <b>{sequenceStats.hBonds}</b></div>
-            </div>
-
-            <div className="divider"></div>
-
-            {/* 5. BIOFISIKA & LINGKUNGAN SEL */}
-            <div className="panel-section-title">
-                <span className="icon">🌡️</span> BIOFISIKA &amp; LINGKUNGAN SEL
-            </div>
-            <p className="section-hint">Parameter dinamis molekul dalam sitoplasma:</p>
-            <div className="toggle-group">
-                <button
-                    id="btn-toggle-thermal"
-                    className={`ctrl-btn ${thermalDynamics ? 'active' : ''}`}
-                    onClick={onToggleThermal}
-                >
-                    <span>🌊 Dinamika Termal (37°C): <b>{thermalDynamics ? 'AKTIF' : 'NONAKTIF'}</b></span>
-                </button>
-                <button
-                    id="btn-toggle-ions"
-                    className={`ctrl-btn ${showIons ? 'active' : ''}`}
-                    onClick={onToggleIons}
-                >
-                    <span>💧 Solvasi &amp; Ion Lawan (Mg²⁺): <b>{showIons ? 'AKTIF' : 'SEMBUNYI'}</b></span>
-                </button>
-                <button
-                    id="btn-toggle-metrics"
-                    className={`ctrl-btn ${metricScaleVisible ? 'active' : ''}`}
-                    onClick={onToggleMetrics}
-                >
-                    <span>📐 Skala Metrik (nm / Å): <b>{metricScaleVisible ? 'TAMPIL' : 'SEMBUNYI'}</b></span>
-                </button>
-            </div>
-
-            <div className="divider"></div>
-
-            {/* KONTROL PEMISAHAN */}
-            <div className="panel-section-title">
-                <span className="icon">⚡</span> KONTROL PEMISAHAN
-            </div>
-            <div className="btn-group-primary">
-                {assemblyMode === 'assembled' ? (
-                    <>
-                        <button id="btn-unzip" className="action-btn btn-neon-blue" onClick={onUnzip}>
-                            <span className="btn-icon">⚡</span>
-                            <span className="btn-text">Pisahkan Untai Ganda (Unzip)</span>
-                        </button>
-                        <button id="btn-explode" className="action-btn btn-neon-purple" onClick={onExplode}>
-                            <span className="btn-icon">💥</span>
-                            <span className="btn-text">Uraikan Per Bagian (Exploded)</span>
-                        </button>
-                    </>
-                ) : (
-                    <button id="btn-reset-assembly" className="action-btn btn-neon-green" onClick={onResetAssembly}>
-                        <span className="btn-icon">🔄</span>
-                        <span className="btn-text">Gabungkan Kembali Heliks</span>
+                    <button id="btn-close-controls" className="btn-icon-close" title="Sembunyikan Panel Kontrol" onClick={onClose}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
                     </button>
-                )}
-            </div>
-
-            <div className="divider"></div>
-
-            {/* ANOTASI & LABEL */}
-            <div className="panel-section-title">
-                <span className="icon">🏷️</span> ANOTASI &amp; LABEL
-            </div>
-            <div className="toggle-group">
-                <button
-                    id="btn-toggle-labels"
-                    className={`ctrl-btn ${labelsVisible ? 'active' : ''}`}
-                    onClick={onToggleLabels}
-                >
-                    <span>👁️ Label Ilmiah 3D: <b>{labelsVisible ? 'TAMPIL' : 'SEMBUNYI'}</b></span>
-                </button>
-            </div>
-
-            <div className="divider"></div>
-
-            {/* ISOLASI KOMPONEN */}
-            <div className="panel-section-title">
-                <span className="icon">🔬</span> ISOLASI KOMPONEN
-            </div>
-            <p className="section-hint">Ketuk untuk menonjolkan bagian tertentu:</p>
-            <div className="filter-chips-scroll">
-                <div className="filter-chips">
-                    <button className={`chip ${filterComponent === 'all' ? 'active' : ''}`} onClick={() => onSelectFilter('all')}>Semua</button>
-                    <button className={`chip chip-backbone ${filterComponent === 'backbone' ? 'active' : ''}`} onClick={() => onSelectFilter('backbone')}>Pita Gula-Fosfat</button>
-                    <button className={`chip chip-adenine ${filterComponent === 'A' ? 'active' : ''}`} onClick={() => onSelectFilter('A')}>Adenin (A - Biru)</button>
-                    <button className={`chip chip-thymine ${filterComponent === 'T' ? 'active' : ''}`} onClick={() => onSelectFilter('T')}>Timin (T - Kuning)</button>
-                    <button className={`chip chip-guanine ${filterComponent === 'G' ? 'active' : ''}`} onClick={() => onSelectFilter('G')}>Guanin (G - Hijau)</button>
-                    <button className={`chip chip-cytosine ${filterComponent === 'C' ? 'active' : ''}`} onClick={() => onSelectFilter('C')}>Sitosin (C - Merah)</button>
-                    <button className={`chip chip-hbond ${filterComponent === 'hbond' ? 'active' : ''}`} onClick={() => onSelectFilter('hbond')}>Ikatan Hidrogen</button>
-                </div>
-            </div>
-
-            <div className="divider"></div>
-
-            {/* NAVIGASI KAMERA */}
-            <div className="panel-section-title">
-                <span className="icon">🎥</span> NAVIGASI KAMERA INDEPENDEN
-            </div>
-            <p className="section-hint">Pilih mode interaksi utama atau gunakan kontrol presisi:</p>
-            <div className="camera-mode-tabs" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-                <button
-                    type="button"
-                    id="btn-cam-mode-rotate"
-                    className={`ctrl-btn ${cameraControlMode === 'rotate' ? 'active' : ''}`}
-                    style={{ marginBottom: 0, justifyContent: 'center', gap: '6px', fontWeight: 600 }}
-                    onClick={() => onSelectCameraMode('rotate')}
-                    title="Geser kursor/sentuhan untuk memutar orbit 360° secara independen"
-                >
-                    <span>🔄</span>
-                    <span>Mode Rotasi</span>
-                </button>
-                <button
-                    type="button"
-                    id="btn-cam-mode-pan"
-                    className={`ctrl-btn ${cameraControlMode === 'pan' ? 'active' : ''}`}
-                    style={{ marginBottom: 0, justifyContent: 'center', gap: '6px', fontWeight: 600 }}
-                    onClick={() => onSelectCameraMode('pan')}
-                    title="Geser kursor/sentuhan untuk menggeser posisi kamera (Pan X/Y) secara independen"
-                >
-                    <span>✥</span>
-                    <span>Mode Geser (Pan)</span>
-                </button>
-            </div>
-
-            {/* Panel Presisi Geser (Pan) & Orbit (Rotate) */}
-            <div
-                style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '8px',
-                    marginBottom: '10px',
-                    background: 'rgba(6, 18, 40, 0.55)',
-                    border: '1px solid rgba(56, 189, 248, 0.16)',
-                    borderRadius: '10px',
-                    padding: '10px'
-                }}
-            >
-                <div>
-                    <div style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 600, marginBottom: '6px', textAlign: 'center' }}>
-                        GESER POSISI (PAN)
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
-                        <span />
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center' }} onClick={() => onCameraStep('pan_up')} title="Geser Kamera ke Atas">↑</button>
-                        <span />
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center' }} onClick={() => onCameraStep('pan_left')} title="Geser Kamera ke Kiri">←</button>
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center', fontSize: '0.7rem' }} onClick={() => onCameraStep('center_pan')} title="Pusatkan Titik Fokus (0,0,0)">⌖</button>
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center' }} onClick={() => onCameraStep('pan_right')} title="Geser Kamera ke Kanan">→</button>
-                        <span />
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center' }} onClick={() => onCameraStep('pan_down')} title="Geser Kamera ke Bawah">↓</button>
-                        <span />
-                    </div>
                 </div>
 
-                <div>
-                    <div style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 600, marginBottom: '6px', textAlign: 'center' }}>
-                        ORBIT PRESISI (15°)
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
-                        <span />
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center' }} onClick={() => onCameraStep('rotate_up')} title="Putar Orbit ke Atas 15°">⤒</button>
-                        <span />
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center' }} onClick={() => onCameraStep('rotate_left')} title="Putar Orbit ke Kiri 15°">⟲</button>
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center', fontSize: '0.7rem' }} onClick={() => onCameraStep('zoom_in')} title="Perbesar (Zoom In)">＋</button>
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center' }} onClick={() => onCameraStep('rotate_right')} title="Putar Orbit ke Kanan 15°">⟳</button>
-                        <span />
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center' }} onClick={() => onCameraStep('rotate_down')} title="Putar Orbit ke Bawah 15°">⤓</button>
-                        <button type="button" className="ctrl-btn" style={{ marginBottom: 0, padding: '6px 0', justifyContent: 'center', fontSize: '0.7rem' }} onClick={() => onCameraStep('zoom_out')} title="Perkecil (Zoom Out)">－</button>
-                    </div>
-                </div>
-            </div>
-
-            <div className="camera-controls">
-                <button
-                    id="btn-toggle-rotate"
-                    className={`ctrl-btn ${autoRotate ? 'active' : ''}`}
-                    onClick={onToggleRotate}
-                >
-                    <span>🔄 Rotasi Otomatis: <b>{autoRotate ? 'AKTIF' : 'NONAKTIF'}</b></span>
-                </button>
-                <button id="btn-reset-camera" className="ctrl-btn" onClick={onResetCamera}>
-                    <span>🎯 Reset Sudut Pandang Awal</span>
-                </button>
-            </div>
-
-            <div className="divider"></div>
-
-            {/* REALITAS VIRTUAL (WebXR 360°) */}
-            <div className="panel-section-title">
-                <span className="icon">🥽</span> VIRTUAL REALITY (WebXR 360°)
-            </div>
-            <p className="section-hint">
-                {webXrStatus === 'supported'
-                    ? 'Headset WebXR terdeteksi — siap masuk ruang imersif 360°:'
-                    : 'Eksplorasi kubah observatorium 360° & lensa stereo VR:'}
-            </p>
-            <div className="toggle-group">
-                <button
-                    type="button"
-                    id="btn-panel-toggle-vr"
-                    className={`ctrl-btn ${isVrModeActive ? 'active' : ''}`}
-                    onClick={onToggleVrMode}
-                >
-                    <span>
-                        🥽 Mode Virtual Reality (360°): <b>{isVrModeActive ? 'AKTIF' : 'NONAKTIF'}</b>
-                    </span>
-                </button>
-                {isVrModeActive && (
+                {/* Category Filter Tabs */}
+                <div className="panel-category-tabs" role="tablist" aria-label="Filter Kategori Kontrol">
                     <button
                         type="button"
-                        id="btn-panel-toggle-stereo"
-                        className={`ctrl-btn ${isStereoLensMode ? 'active' : ''}`}
-                        onClick={onToggleStereoLensMode}
+                        role="tab"
+                        aria-selected={activeSectionTab === 'all'}
+                        className={`panel-cat-tab ${activeSectionTab === 'all' ? 'active' : ''}`}
+                        onClick={() => setActiveSectionTab('all')}
                     >
-                        <span>
-                            👓 Lensa Stereo Headset (SBS): <b>{isStereoLensMode ? 'DUAL-EYE' : 'PANORAMA 360°'}</b>
-                        </span>
+                        Semua
                     </button>
-                )}
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={activeSectionTab === 'structure'}
+                        className={`panel-cat-tab ${activeSectionTab === 'structure' ? 'active' : ''}`}
+                        onClick={() => setActiveSectionTab('structure')}
+                    >
+                        Struktur
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={activeSectionTab === 'biophysics'}
+                        className={`panel-cat-tab ${activeSectionTab === 'biophysics' ? 'active' : ''}`}
+                        onClick={() => setActiveSectionTab('biophysics')}
+                    >
+                        Biofisika
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={activeSectionTab === 'optics'}
+                        className={`panel-cat-tab ${activeSectionTab === 'optics' ? 'active' : ''}`}
+                        onClick={() => setActiveSectionTab('optics')}
+                    >
+                        Optik &amp; Kamera
+                    </button>
+                </div>
             </div>
 
-            {/* LEGENDA BIOKIMIA */}
-            <div className="legend-box">
-                <div className="legend-title">LEGENDA &amp; KLASIFIKASI BIOKIMIA</div>
-                <div className="legend-grid">
-                    <div className="legend-item"><span className="color-dot dot-a"></span> <b>A</b> Adenin (Purin: 2 Cincin)</div>
-                    <div className="legend-item"><span className="color-dot dot-t"></span> <b>T</b> Timin (Pirimidin: 1 Cincin)</div>
-                    <div className="legend-item"><span className="color-dot dot-g"></span> <b>G</b> Guanin (Purin: 2 Cincin)</div>
-                    <div className="legend-item"><span className="color-dot dot-c"></span> <b>C</b> Sitosin (Pirimidin: 1 Cincin)</div>
-                    <div className="legend-item"><span className="color-dot dot-backbone"></span> <b>P-S</b> Gula Deoksiribosa-Fosfat</div>
-                    <div className="legend-item"><span className="color-dot dot-hbond"></span> <b>···</b> Ikatan Hidrogen (A=T, G≡C)</div>
-                    <div className="legend-item"><span className="color-dot dot-methyl"></span> <b>-CH₃</b> Metilasi Epigenetik (5-mC)</div>
-                    <div className="legend-item"><span className="color-dot dot-dimer"></span> <b>CPD</b> Dimer Timin Fotoproduk UV</div>
-                    <div className="legend-item"><span className="color-dot dot-intercalator"></span> <b>Drug</b> Interkalasi Kemoterapi</div>
-                    <div className="legend-item"><span className="color-dot dot-ion"></span> <b>Mg²⁺</b> Ion Lawan &amp; Air Solvasi</div>
-                </div>
-                <div className="legend-polarity-row">
-                    <div className="polarity-chip"><b>5'</b> Fosfat Bebas</div>
-                    <div className="polarity-arrow">⇄</div>
-                    <div className="polarity-chip"><b>3'</b> -OH Bebas (Antiparalel)</div>
-                </div>
-                {renderMode === 'electrostatic' ? (
-                    <div className="legend-electro-row">
-                        <span className="electro-label">Potensial Coulomb:</span>
-                        <span className="electro-bar"></span>
-                        <span className="electro-tags"><span>-1e (Fosfat)</span><span>0 (Netral)</span><span>+1e (Amino)</span></span>
+            <div className="panel-scroll-body">
+                {/* SECTION 1: KONFORMASI & REPRESENTASI */}
+                <div className={showStructure ? 'panel-module' : 'hidden'}>
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">01. Konformasi Alotropik</span>
+                        <span className="panel-section-meta">Dickerson &amp; Saenger</span>
                     </div>
-                ) : (
-                    <div className="legend-cpk-row">
-                        <span className="cpk-label">Standar CPK:</span>
-                        <span className="cpk-item"><i style={{ background: '#3b4252' }}></i>C</span>
-                        <span className="cpk-item"><i style={{ background: '#1d4ed8' }}></i>N</span>
-                        <span className="cpk-item"><i style={{ background: '#dc2626' }}></i>O</span>
-                        <span className="cpk-item"><i style={{ background: '#d97706' }}></i>P</span>
-                        <span className="cpk-item"><i style={{ background: '#e2e8f0' }}></i>H</span>
+
+                    <div className="conformation-segmented">
+                        <button
+                            type="button"
+                            className={`conf-seg-btn ${conformation === 'B' ? 'active' : ''}`}
+                            onClick={() => onSelectConformation('B')}
+                            title="B-DNA: Bentuk fisiologis alami seluler"
+                        >
+                            <span className="conf-code">B-DNA</span>
+                            <span className="conf-label">Fisiologis</span>
+                        </button>
+                        <button
+                            type="button"
+                            className={`conf-seg-btn ${conformation === 'A' ? 'active' : ''}`}
+                            onClick={() => onSelectConformation('A')}
+                            title="A-DNA: Terdehidrasi & hibrida DNA-RNA"
+                        >
+                            <span className="conf-code">A-DNA</span>
+                            <span className="conf-label">Kompak 19°</span>
+                        </button>
+                        <button
+                            type="button"
+                            className={`conf-seg-btn ${conformation === 'Z' ? 'active' : ''}`}
+                            onClick={() => onSelectConformation('Z')}
+                            title="Z-DNA: Heliks kidal bergantian purin-pirimidin"
+                        >
+                            <span className="conf-code">Z-DNA</span>
+                            <span className="conf-label">Heliks Kidal</span>
+                        </button>
                     </div>
-                )}
+                    <div className="conformation-readout">
+                        <div className="conf-readout-title">{CONFORMATION_SUMMARY[conformation].title}</div>
+                        <div className="conf-readout-sub">{CONFORMATION_SUMMARY[conformation].detail}</div>
+                    </div>
+
+                    <div className="divider"></div>
+
+                    {/* 2. MODE REPRESENTASI MOLEKULER */}
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">02. Standar Representasi Ilmiah</span>
+                        <span className="panel-section-meta">RCSB PDB / PyMOL</span>
+                    </div>
+                    <div className="mode-selector-grid">
+                        <button
+                            type="button"
+                            className={`mode-btn ${renderMode === 'bio' ? 'active' : ''}`}
+                            onClick={() => onSelectRenderMode('bio')}
+                        >
+                            <div className="mode-top-row">
+                                <span className="mode-code-tag">BIO</span>
+                                <span className="mode-name">Bio-Illustrative</span>
+                            </div>
+                            <span className="mode-sub">Cincin Aromatik &amp; Pita Gula-Fosfat</span>
+                        </button>
+                        <button
+                            type="button"
+                            className={`mode-btn ${renderMode === 'cpk' ? 'active' : ''}`}
+                            onClick={() => onSelectRenderMode('cpk')}
+                        >
+                            <div className="mode-top-row">
+                                <span className="mode-code-tag">CPK</span>
+                                <span className="mode-name">CPK Space-Filling</span>
+                            </div>
+                            <span className="mode-sub">Volume Atomik Van der Waals</span>
+                        </button>
+                        <button
+                            type="button"
+                            className={`mode-btn ${renderMode === 'ballstick' ? 'active' : ''}`}
+                            onClick={() => onSelectRenderMode('ballstick')}
+                        >
+                            <div className="mode-top-row">
+                                <span className="mode-code-tag">B&amp;S</span>
+                                <span className="mode-name">Ball &amp; Stick</span>
+                            </div>
+                            <span className="mode-sub">Geometri Ikatan Kovalen 3D</span>
+                        </button>
+                        <button
+                            type="button"
+                            className={`mode-btn ${renderMode === 'electrostatic' ? 'active' : ''}`}
+                            onClick={() => onSelectRenderMode('electrostatic')}
+                        >
+                            <div className="mode-top-row">
+                                <span className="mode-code-tag">ESP</span>
+                                <span className="mode-name">Coulombic Surface</span>
+                            </div>
+                            <span className="mode-sub">Distribusi Potensial Elektrostatik</span>
+                        </button>
+                    </div>
+
+                    <div className="divider"></div>
+
+                    {/* 3. SINTESIS SEKUENS NUKLEOTIDA DINAMIS */}
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">03. Sintesis Sekuens Nukleotida</span>
+                        <span className="panel-section-meta">Chargaff A=T, G≡C</span>
+                    </div>
+                    <form onSubmit={handleApply} className="seq-input-group">
+                        <input
+                            type="text"
+                            id="dna-seq-input"
+                            className="seq-input"
+                            value={inputSeq}
+                            onChange={(e) => setInputSeq(e.target.value.toUpperCase())}
+                            maxLength={24}
+                            placeholder="Ketik urutan A, T, G, C..."
+                            spellCheck="false"
+                            autoComplete="off"
+                        />
+                        <button type="submit" id="btn-apply-seq" className="seq-apply-btn" title="Rakit Ulang Heliks 3D">
+                            Sintesis
+                        </button>
+                    </form>
+                    <div className="seq-preset-chips">
+                        <button
+                            type="button"
+                            className={`seq-chip ${sequence === 'ATGCGTACCTACGATC' ? 'active' : ''}`}
+                            onClick={() => handleChipClick('ATGCGTACCTACGATC')}
+                        >
+                            Watson-Crick
+                        </button>
+                        <button
+                            type="button"
+                            className={`seq-chip ${sequence === 'CGCGCGGCCGCGCGCG' ? 'active' : ''}`}
+                            onClick={() => handleChipClick('CGCGCGGCCGCGCGCG')}
+                        >
+                            CpG Island (GC)
+                        </button>
+                        <button
+                            type="button"
+                            className={`seq-chip ${sequence === 'TATAAATATAAATATA' ? 'active' : ''}`}
+                            onClick={() => handleChipClick('TATAAATATAAATATA')}
+                        >
+                            TATA Box (AT)
+                        </button>
+                        <button
+                            type="button"
+                            className={`seq-chip ${sequence === 'CGCGCGCGCGCGCGCG' ? 'active' : ''}`}
+                            onClick={() => handleChipClick('CGCGCGCGCGCGCGCG')}
+                        >
+                            poly(dG-dC)
+                        </button>
+                    </div>
+                    <div className="seq-stats-badge" id="seq-stats-badge">
+                        <div className="seq-stat-item">
+                            <span className="stat-lbl">Panjang</span>
+                            <b>{sequenceStats.length} pb</b>
+                        </div>
+                        <div className="seq-stat-item">
+                            <span className="stat-lbl">Kandungan GC</span>
+                            <b>{sequenceStats.gcPercent}</b>
+                        </div>
+                        <div className="seq-stat-item">
+                            <span className="stat-lbl">Titik Leleh (Tₘ)</span>
+                            <b>{sequenceStats.tm}</b>
+                        </div>
+                        <div className="seq-stat-item">
+                            <span className="stat-lbl">Ikatan Hidrogen</span>
+                            <b>{sequenceStats.hBonds}</b>
+                        </div>
+                    </div>
+
+                    <div className="divider"></div>
+
+                    {/* ISOLASI KOMPONEN & PEMISAHAN UNTAI */}
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">04. Manipulasi Untai &amp; Isolasi</span>
+                        <span className="panel-section-meta">Topologi Heliks</span>
+                    </div>
+                    <div className="btn-group-primary">
+                        {assemblyMode === 'assembled' ? (
+                            <div className="action-btn-row">
+                                <button id="btn-unzip" className="action-btn btn-neon-blue" onClick={onUnzip}>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                        <path d="M16 3h5v5" />
+                                        <path d="M8 3H3v5" />
+                                        <path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3" />
+                                        <path d="m15 9 6-6" />
+                                    </svg>
+                                    <span className="btn-text">Pisahkan Untai (Unzip)</span>
+                                </button>
+                                <button id="btn-explode" className="action-btn btn-neon-purple" onClick={onExplode}>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                        <polyline points="15 3 21 3 21 9" />
+                                        <polyline points="9 21 3 21 3 15" />
+                                        <line x1="21" y1="3" x2="14" y2="10" />
+                                        <line x1="3" y1="21" x2="10" y2="14" />
+                                    </svg>
+                                    <span className="btn-text">Uraikan (Exploded)</span>
+                                </button>
+                            </div>
+                        ) : (
+                            <button id="btn-reset-assembly" className="action-btn btn-neon-green" onClick={onResetAssembly}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                    <path d="M3 3v5h5" />
+                                </svg>
+                                <span className="btn-text">Gabungkan Kembali Heliks</span>
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="filter-chips-scroll" style={{ marginTop: '10px' }}>
+                        <div className="filter-chips">
+                            <button className={`chip ${filterComponent === 'all' ? 'active' : ''}`} onClick={() => onSelectFilter('all')}>Semua Struktur</button>
+                            <button className={`chip chip-backbone ${filterComponent === 'backbone' ? 'active' : ''}`} onClick={() => onSelectFilter('backbone')}>Pita Gula-Fosfat</button>
+                            <button className={`chip chip-adenine ${filterComponent === 'A' ? 'active' : ''}`} onClick={() => onSelectFilter('A')}>Adenin (A)</button>
+                            <button className={`chip chip-thymine ${filterComponent === 'T' ? 'active' : ''}`} onClick={() => onSelectFilter('T')}>Timin (T)</button>
+                            <button className={`chip chip-guanine ${filterComponent === 'G' ? 'active' : ''}`} onClick={() => onSelectFilter('G')}>Guanin (G)</button>
+                            <button className={`chip chip-cytosine ${filterComponent === 'C' ? 'active' : ''}`} onClick={() => onSelectFilter('C')}>Sitosin (C)</button>
+                            <button className={`chip chip-hbond ${filterComponent === 'hbond' ? 'active' : ''}`} onClick={() => onSelectFilter('hbond')}>Ikatan Hidrogen</button>
+                        </div>
+                    </div>
+                </div>
+
+                {activeSectionTab === 'all' && <div className="divider"></div>}
+
+                {/* SECTION 2: BIOFISIKA & LESI MOLEKULER */}
+                <div className={showBiophysics ? 'panel-module' : 'hidden'}>
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">05. Kondisi &amp; Lesi Molekuler</span>
+                        <span className="panel-section-meta">Epigenetika &amp; Patologi</span>
+                    </div>
+                    <div className="condition-selector-grid">
+                        <button
+                            type="button"
+                            className={`condition-btn ${condition === 'normal' ? 'active' : ''}`}
+                            onClick={() => onSelectCondition('normal')}
+                        >
+                            <div className="mode-top-row">
+                                <span className="cond-code-tag">WT</span>
+                                <span className="cond-title">Normal (Heliks Utuh)</span>
+                            </div>
+                            <span className="cond-sub">Pasangan basa kanonik tanpa distorsi</span>
+                        </button>
+                        <button
+                            type="button"
+                            className={`condition-btn ${condition === 'methylation' ? 'active' : ''}`}
+                            onClick={() => onSelectCondition('methylation')}
+                        >
+                            <div className="mode-top-row">
+                                <span className="cond-code-tag">5mC</span>
+                                <span className="cond-title">Metilasi DNA (5-mC)</span>
+                            </div>
+                            <span className="cond-sub">Adduksi -CH₃ pada C5 Sitosin</span>
+                        </button>
+                        <button
+                            type="button"
+                            className={`condition-btn ${condition === 'thymine_dimer' ? 'active' : ''}`}
+                            onClick={() => onSelectCondition('thymine_dimer')}
+                        >
+                            <div className="mode-top-row">
+                                <span className="cond-code-tag">CPD</span>
+                                <span className="cond-title">Dimer Timin (Lesi UV)</span>
+                            </div>
+                            <span className="cond-sub">Cincin siklobutana &amp; tekukan 30°</span>
+                        </button>
+                        <button
+                            type="button"
+                            className={`condition-btn ${condition === 'intercalation' ? 'active' : ''}`}
+                            onClick={() => onSelectCondition('intercalation')}
+                        >
+                            <div className="mode-top-row">
+                                <span className="cond-code-tag">INT</span>
+                                <span className="cond-title">Interkalasi Kemoterapi</span>
+                            </div>
+                            <span className="cond-sub">Penyisipan planar &amp; renggangan aksial</span>
+                        </button>
+                    </div>
+
+                    <div className="divider"></div>
+
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">06. Biofisika &amp; Anotasi Metrik</span>
+                        <span className="panel-section-meta">Fisiologi 37°C</span>
+                    </div>
+                    <div className="toggle-group">
+                        <button
+                            id="btn-toggle-thermal"
+                            type="button"
+                            className={`ctrl-btn ${thermalDynamics ? 'active' : ''}`}
+                            onClick={onToggleThermal}
+                        >
+                            <span className="ctrl-btn-label">Dinamika Termal Brownian (37°C)</span>
+                            <span className={`status-pill ${thermalDynamics ? 'on' : 'off'}`}>
+                                {thermalDynamics ? 'AKTIF' : 'NONAKTIF'}
+                            </span>
+                        </button>
+                        <button
+                            id="btn-toggle-ions"
+                            type="button"
+                            className={`ctrl-btn ${showIons ? 'active' : ''}`}
+                            onClick={onToggleIons}
+                        >
+                            <span className="ctrl-btn-label">Solvasi Air &amp; Kation Mg²⁺</span>
+                            <span className={`status-pill ${showIons ? 'on' : 'off'}`}>
+                                {showIons ? 'AKTIF' : 'SEMBUNYI'}
+                            </span>
+                        </button>
+                        <button
+                            id="btn-toggle-metrics"
+                            type="button"
+                            className={`ctrl-btn ${metricScaleVisible ? 'active' : ''}`}
+                            onClick={onToggleMetrics}
+                        >
+                            <span className="ctrl-btn-label">Penggaris Dimensi Metrik (nm / Å)</span>
+                            <span className={`status-pill ${metricScaleVisible ? 'on' : 'off'}`}>
+                                {metricScaleVisible ? 'TAMPIL' : 'SEMBUNYI'}
+                            </span>
+                        </button>
+                        <button
+                            id="btn-toggle-labels"
+                            type="button"
+                            className={`ctrl-btn ${labelsVisible ? 'active' : ''}`}
+                            onClick={onToggleLabels}
+                        >
+                            <span className="ctrl-btn-label">Anotasi Struktur 3D</span>
+                            <span className={`status-pill ${labelsVisible ? 'on' : 'off'}`}>
+                                {labelsVisible ? 'TAMPIL' : 'SEMBUNYI'}
+                            </span>
+                        </button>
+                    </div>
+                </div>
+
+                {activeSectionTab === 'all' && <div className="divider"></div>}
+
+                {/* SECTION 3: OPTIK BLOOM, KAMERA & WEBXR */}
+                <div className={showOptics ? 'panel-module' : 'hidden'}>
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">07. Post-Processing Optik (Bloom)</span>
+                        <span className="panel-section-meta">UnrealBloomPass HDR</span>
+                    </div>
+                    <div className="toggle-group">
+                        <button
+                            id="btn-toggle-bloom"
+                            type="button"
+                            className={`ctrl-btn ${bloomEnabled ? 'active' : ''}`}
+                            onClick={onToggleBloom}
+                        >
+                            <span className="ctrl-btn-label">Post-Processing Pendaran Bloom</span>
+                            <span className={`status-pill ${bloomEnabled ? 'on' : 'off'}`}>
+                                {bloomEnabled ? 'AKTIF' : 'NONAKTIF'}
+                            </span>
+                        </button>
+                        {bloomEnabled && (
+                            <div className="bloom-calibration-box">
+                                <div className="bloom-row">
+                                    <label htmlFor="select-bloom-preset" className="bloom-label">
+                                        Preset Gaya
+                                    </label>
+                                    <select
+                                        id="select-bloom-preset"
+                                        value={currentBloomPreset}
+                                        onChange={(e) => handleSelectBloomPreset(e.target.value)}
+                                        className="bloom-select"
+                                        title="Pilih preset gaya pencahayaan Bloom otomatis (Subtle, Cinematic, Extreme)"
+                                    >
+                                        <option value="subtle">Subtle (Kristal Halus)</option>
+                                        <option value="cinematic">Cinematic (Studio Seimbang)</option>
+                                        <option value="extreme">Extreme (Bioluminesensi Penuh)</option>
+                                        {currentBloomPreset === 'custom' && (
+                                            <option value="custom">Custom (Manual)</option>
+                                        )}
+                                    </select>
+                                </div>
+                                <div className="bloom-row">
+                                    <span className="bloom-label">
+                                        Intensitas Glow <b className="mono-val">{Math.round(bloomStrength * 100)}%</b>
+                                    </span>
+                                    <input
+                                        id="slider-bloom-strength"
+                                        type="range"
+                                        min={0.1}
+                                        max={1.0}
+                                        step={0.05}
+                                        value={bloomStrength}
+                                        onChange={(e) => onChangeBloomStrength(parseFloat(e.target.value))}
+                                        className="bloom-slider"
+                                        title="Atur intensitas pendaran cahaya UnrealBloomPass"
+                                    />
+                                </div>
+                                <div className="bloom-row">
+                                    <span className="bloom-label">
+                                        Emission Threshold <b className="mono-val">{bloomThreshold.toFixed(2)}</b>
+                                    </span>
+                                    <input
+                                        id="slider-bloom-threshold"
+                                        type="range"
+                                        min={0.30}
+                                        max={1.20}
+                                        step={0.02}
+                                        value={bloomThreshold}
+                                        onChange={(e) => onChangeBloomThreshold(parseFloat(e.target.value))}
+                                        className="bloom-slider"
+                                        title="Naikkan Emission Threshold agar hanya aksen neon paling terang yang berpendar"
+                                    />
+                                </div>
+                                <div className="bloom-desc">
+                                    {currentBloomPreset !== 'custom'
+                                        ? BLOOM_PRESETS[currentBloomPreset].desc
+                                        : 'Konfigurasi manual aktif — sesuaikan kekuatan pijar dan ambang batas emisi.'}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="divider"></div>
+
+                    {/* NAVIGASI KAMERA */}
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">08. Navigasi Kamera Presisi</span>
+                        <span className="panel-section-meta">6-DOF Orbit &amp; Pan</span>
+                    </div>
+                    <div className="camera-mode-tabs">
+                        <button
+                            type="button"
+                            id="btn-cam-mode-rotate"
+                            className={`cam-seg-btn ${cameraControlMode === 'rotate' ? 'active' : ''}`}
+                            onClick={() => onSelectCameraMode('rotate')}
+                            title="Geser kursor/sentuhan untuk memutar orbit 360° secara independen"
+                        >
+                            Mode Rotasi Orbit
+                        </button>
+                        <button
+                            type="button"
+                            id="btn-cam-mode-pan"
+                            className={`cam-seg-btn ${cameraControlMode === 'pan' ? 'active' : ''}`}
+                            onClick={() => onSelectCameraMode('pan')}
+                            title="Geser kursor/sentuhan untuk menggeser posisi kamera (Pan X/Y) secara independen"
+                        >
+                            Mode Geser (Pan)
+                        </button>
+                    </div>
+
+                    {/* Panel Presisi Geser (Pan) & Orbit (Rotate) */}
+                    <div className="dpad-matrix-card">
+                        <div>
+                            <div className="dpad-label">TRANSLASI POSISI (PAN)</div>
+                            <div className="dpad-grid">
+                                <span />
+                                <button type="button" className="dpad-btn" onClick={() => onCameraStep('pan_up')} title="Geser Kamera ke Atas">↑</button>
+                                <span />
+                                <button type="button" className="dpad-btn" onClick={() => onCameraStep('pan_left')} title="Geser Kamera ke Kiri">←</button>
+                                <button type="button" className="dpad-btn dpad-center" onClick={() => onCameraStep('center_pan')} title="Pusatkan Titik Fokus (0,0,0)">0,0</button>
+                                <button type="button" className="dpad-btn" onClick={() => onCameraStep('pan_right')} title="Geser Kamera ke Kanan">→</button>
+                                <span />
+                                <button type="button" className="dpad-btn" onClick={() => onCameraStep('pan_down')} title="Geser Kamera ke Bawah">↓</button>
+                                <span />
+                            </div>
+                        </div>
+
+                        <div>
+                            <div className="dpad-label">INKREMEN ORBIT (15°)</div>
+                            <div className="dpad-grid">
+                                <span />
+                                <button type="button" className="dpad-btn" onClick={() => onCameraStep('rotate_up')} title="Putar Orbit ke Atas 15°">⤒</button>
+                                <span />
+                                <button type="button" className="dpad-btn" onClick={() => onCameraStep('rotate_left')} title="Putar Orbit ke Kiri 15°">⟲</button>
+                                <button type="button" className="dpad-btn dpad-center" onClick={() => onCameraStep('zoom_in')} title="Perbesar (Zoom In)">＋</button>
+                                <button type="button" className="dpad-btn" onClick={() => onCameraStep('rotate_right')} title="Putar Orbit ke Kanan 15°">⟳</button>
+                                <span />
+                                <button type="button" className="dpad-btn" onClick={() => onCameraStep('rotate_down')} title="Putar Orbit ke Bawah 15°">⤓</button>
+                                <button type="button" className="dpad-btn dpad-center" onClick={() => onCameraStep('zoom_out')} title="Perkecil (Zoom Out)">－</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="camera-controls">
+                        <button
+                            id="btn-toggle-rotate"
+                            type="button"
+                            className={`ctrl-btn ${autoRotate ? 'active' : ''}`}
+                            onClick={onToggleRotate}
+                        >
+                            <span className="ctrl-btn-label">Rotasi Orbit Otomatis</span>
+                            <span className={`status-pill ${autoRotate ? 'on' : 'off'}`}>
+                                {autoRotate ? 'AKTIF' : 'NONAKTIF'}
+                            </span>
+                        </button>
+                        <button id="btn-reset-camera" type="button" className="ctrl-btn" onClick={onResetCamera}>
+                            <span className="ctrl-btn-label">Reset Koordinat Kamera</span>
+                            <span className="status-pill neutral">DEFAULT</span>
+                        </button>
+                    </div>
+
+                    <div className="divider"></div>
+
+                    {/* REALITAS VIRTUAL (WebXR 360°) */}
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">09. Lingkungan Imersif WebXR</span>
+                        <span className="panel-section-meta">
+                            {webXrStatus === 'supported' ? 'Headset Siap' : 'Simulasi 360°'}
+                        </span>
+                    </div>
+                    <div className="toggle-group">
+                        <button
+                            type="button"
+                            id="btn-panel-toggle-vr"
+                            className={`ctrl-btn ${isVrModeActive ? 'active' : ''}`}
+                            onClick={onToggleVrMode}
+                        >
+                            <span className="ctrl-btn-label">Mode Virtual Reality (360°)</span>
+                            <span className={`status-pill ${isVrModeActive ? 'on' : 'off'}`}>
+                                {isVrModeActive ? 'AKTIF' : 'NONAKTIF'}
+                            </span>
+                        </button>
+                        {isVrModeActive && (
+                            <button
+                                type="button"
+                                id="btn-panel-toggle-stereo"
+                                className={`ctrl-btn ${isStereoLensMode ? 'active' : ''}`}
+                                onClick={onToggleStereoLensMode}
+                            >
+                                <span className="ctrl-btn-label">Proyeksi Lensa Stereoskopik</span>
+                                <span className={`status-pill ${isStereoLensMode ? 'on' : 'neutral'}`}>
+                                    {isStereoLensMode ? 'SBS DUAL' : 'MONO 360°'}
+                                </span>
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* LEGENDA BIOKIMIA */}
+                <div className="legend-box">
+                    <div className="legend-title">LEGENDA &amp; KLASIFIKASI BIOKIMIA</div>
+                    <div className="legend-grid">
+                        <div className="legend-item"><span className="color-dot dot-a"></span> <b>A</b> Adenin (Purin)</div>
+                        <div className="legend-item"><span className="color-dot dot-t"></span> <b>T</b> Timin (Pirimidin)</div>
+                        <div className="legend-item"><span className="color-dot dot-g"></span> <b>G</b> Guanin (Purin)</div>
+                        <div className="legend-item"><span className="color-dot dot-c"></span> <b>C</b> Sitosin (Pirimidin)</div>
+                        <div className="legend-item"><span className="color-dot dot-backbone"></span> <b>P-S</b> Gula-Fosfat</div>
+                        <div className="legend-item"><span className="color-dot dot-hbond"></span> <b>H</b> Ikatan Hidrogen</div>
+                        <div className="legend-item"><span className="color-dot dot-methyl"></span> <b>5mC</b> Metilasi (-CH₃)</div>
+                        <div className="legend-item"><span className="color-dot dot-dimer"></span> <b>CPD</b> Dimer Timin UV</div>
+                        <div className="legend-item"><span className="color-dot dot-intercalator"></span> <b>INT</b> Interkalator</div>
+                        <div className="legend-item"><span className="color-dot dot-ion"></span> <b>Mg²⁺</b> Kation &amp; Air</div>
+                    </div>
+                    <div className="legend-polarity-row">
+                        <div className="polarity-chip"><b>5'</b> Ujung Fosfat</div>
+                        <div className="polarity-arrow">⇄</div>
+                        <div className="polarity-chip"><b>3'</b> Ujung Hidroksil (-OH)</div>
+                    </div>
+                    {renderMode === 'electrostatic' ? (
+                        <div className="legend-electro-row">
+                            <span className="electro-label">Gradien Potensial Coulomb:</span>
+                            <span className="electro-bar"></span>
+                            <span className="electro-tags"><span>-1e (Fosfat)</span><span>0 (Netral)</span><span>+1e (Kationik)</span></span>
+                        </div>
+                    ) : (
+                        <div className="legend-cpk-row">
+                            <span className="cpk-label">Atom CPK:</span>
+                            <span className="cpk-item"><i style={{ background: '#3b4252' }}></i>C</span>
+                            <span className="cpk-item"><i style={{ background: '#1d4ed8' }}></i>N</span>
+                            <span className="cpk-item"><i style={{ background: '#dc2626' }}></i>O</span>
+                            <span className="cpk-item"><i style={{ background: '#d97706' }}></i>P</span>
+                            <span className="cpk-item"><i style={{ background: '#e2e8f0' }}></i>H</span>
+                        </div>
+                    )}
+                </div>
             </div>
         </aside>
     );

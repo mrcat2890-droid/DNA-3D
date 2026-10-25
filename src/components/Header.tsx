@@ -1,15 +1,35 @@
 import React from 'react';
+import { ConformationType, RenderModeType } from '../types/dna';
 
 interface HeaderProps {
+    conformation: ConformationType;
+    renderMode: RenderModeType;
+    sequenceLength: number;
+    tmValue: string;
     isVrModeActive: boolean;
+    isControlsVisible?: boolean;
+    isInspectorVisible?: boolean;
     onToggleVrMode: () => void;
     onOpenTutorial: () => void;
     onToggleControls: () => void;
     onToggleInspector: () => void;
 }
 
+const RENDER_MODE_LABELS: Record<RenderModeType, string> = {
+    bio: 'Bio-Illustrative',
+    cpk: 'CPK Space-Filling',
+    ballstick: 'Ball & Stick',
+    electrostatic: 'Coulombic ESP'
+};
+
 export const Header: React.FC<HeaderProps> = ({
+    conformation,
+    renderMode,
+    sequenceLength,
+    tmValue,
     isVrModeActive,
+    isControlsVisible = true,
+    isInspectorVisible = true,
     onToggleVrMode,
     onOpenTutorial,
     onToggleControls,
@@ -18,30 +38,66 @@ export const Header: React.FC<HeaderProps> = ({
     return (
         <header id="app-header">
             <div className="header-content">
-                <div className="header-left">
-                    <div className="header-nav-row">
-                        <span className="logo-badge">
-                            <span className="pulse-dot"></span>
-                            <span className="badge-text">GEN-OS 3D BIO-CORE</span>
-                        </span>
+                {/* Left Zone: Brand & Instrument Identity */}
+                <div className="header-brand-zone">
+                    <div className="brand-emblem" aria-hidden="true">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M4 4c5.5 0 10.5 16 16 16" />
+                            <path d="M20 4c-5.5 0-10.5 16-16 16" />
+                            <line x1="6.5" y1="7" x2="17.5" y2="7" />
+                            <line x1="8.5" y1="12" x2="15.5" y2="12" />
+                            <line x1="6.5" y1="17" x2="17.5" y2="17" />
+                        </svg>
                     </div>
-                    <h1>STRUKTUR HELIKS GANDA DNA</h1>
-                    <p className="subtitle">Eksplorasi Molekuler Interaktif 360° Watson-Crick</p>
+                    <div className="header-title-group">
+                        <h1>Struktur Heliks Ganda DNA</h1>
+                        <div className="header-meta-inline">
+                            <span>Kristalografi Sinar-X Watson-Crick</span>
+                            <span className="meta-sep" aria-hidden="true">·</span>
+                            <span className="mono-metric">{conformation}-DNA</span>
+                            <span className="meta-sep" aria-hidden="true">·</span>
+                            <span>{RENDER_MODE_LABELS[renderMode]}</span>
+                            <span className="meta-sep" aria-hidden="true">·</span>
+                            <span className="mono-metric">{sequenceLength} pb ({tmValue})</span>
+                        </div>
+                    </div>
                 </div>
+
+                {/* Right Zone: Workspace Controls & Modal Triggers */}
                 <div className="header-actions">
                     <button
+                        id="btn-toggle-controls-panel"
+                        className={`header-btn ${isControlsVisible ? 'is-active' : ''}`}
+                        title="Tampilkan / Sembunyikan Panel Kontrol Parameter"
+                        onClick={onToggleControls}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <line x1="4" y1="6" x2="20" y2="6" />
+                            <line x1="4" y1="12" x2="20" y2="12" />
+                            <line x1="4" y1="18" x2="20" y2="18" />
+                            <circle cx="9" cy="6" r="2" fill="currentColor" />
+                            <circle cx="15" cy="12" r="2" fill="currentColor" />
+                            <circle cx="10" cy="18" r="2" fill="currentColor" />
+                        </svg>
+                        <span className="header-btn-text">Panel Kontrol</span>
+                    </button>
+
+                    <button
+                        id="btn-toggle-inspector-panel"
+                        className={`header-btn ${isInspectorVisible ? 'is-active' : ''}`}
+                        title="Tampilkan / Sembunyikan Panel Inspektor Molekul"
+                        onClick={onToggleInspector}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <polygon points="12 2 20 7 20 17 12 22 4 17 4 7 12 2" />
+                            <circle cx="12" cy="12" r="3" />
+                        </svg>
+                        <span className="header-btn-text">Inspektor</span>
+                    </button>
+
+                    <button
                         id="btn-toggle-vr"
-                        className="header-btn"
-                        style={
-                            isVrModeActive
-                                ? {
-                                      background: 'rgba(56, 189, 248, 0.28)',
-                                      borderColor: '#38bdf8',
-                                      color: '#ffffff',
-                                      boxShadow: '0 0 14px rgba(56, 189, 248, 0.45)'
-                                  }
-                                : undefined
-                        }
+                        className={`header-btn ${isVrModeActive ? 'is-active' : ''}`}
                         title={
                             isVrModeActive
                                 ? 'Keluar dari Mode Virtual Reality (WebXR 360°)'
@@ -49,39 +105,29 @@ export const Header: React.FC<HeaderProps> = ({
                         }
                         onClick={onToggleVrMode}
                     >
-                        <span className="header-btn-icon">🥽</span>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <rect x="2" y="7" width="20" height="10" rx="3" />
+                            <path d="M10 17l2-3 2 3" />
+                            <circle cx="7.5" cy="12" r="1.5" />
+                            <circle cx="16.5" cy="12" r="1.5" />
+                        </svg>
                         <span className="header-btn-text">{isVrModeActive ? 'Keluar VR' : 'VR 360°'}</span>
                     </button>
+
                     <button
                         id="btn-open-tutorial"
                         className="header-btn header-btn-tutorial"
-                        title="Buka Panduan Tutorial Interaktif"
+                        title="Buka Dokumentasi & Panduan Ilmiah"
                         onClick={onOpenTutorial}
                     >
-                        <span className="header-btn-icon">💡</span>
-                        <span className="header-btn-text">Tutorial</span>
-                    </button>
-                    <button
-                        id="btn-toggle-controls-panel"
-                        className="header-btn"
-                        title="Buka Panel Kontrol"
-                        onClick={onToggleControls}
-                    >
-                        <span className="header-btn-icon">⚙️</span>
-                        <span className="header-btn-text">Menu</span>
-                    </button>
-                    <button
-                        id="btn-toggle-inspector-panel"
-                        className="header-btn"
-                        title="Buka Detail Molekul"
-                        onClick={onToggleInspector}
-                    >
-                        <span className="header-btn-icon">🔬</span>
-                        <span className="header-btn-text">Detail</span>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                        </svg>
+                        <span className="header-btn-text">Panduan Ilmiah</span>
                     </button>
                 </div>
             </div>
         </header>
     );
 };
-

@@ -1,6 +1,10 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import {
     ConformationType,
     RenderModeType,
@@ -25,12 +29,18 @@ interface DnaCanvasProps {
     showIons: boolean;
     metricScaleVisible: boolean;
     labelsVisible: boolean;
+    bloomEnabled?: boolean;
+    bloomStrength?: number;
+    bloomThreshold?: number;
     cameraControlMode: CameraControlMode;
     cameraStepCommand: CameraStepCommand | null;
     isVrModeActive: boolean;
     isStereoLensMode: boolean;
     onVrModeChange: (active: boolean) => void;
     onWebXrSupportDetected: (status: WebXrSupportStatus) => void;
+    onUpdateVrPerformance?: (metrics: { latencyMs: number; fps: number }) => void;
+    selectedComponentKey?: string | null;
+    focusComponentTrigger?: number;
     onSelectComponent: (type: string) => void;
     onUpdateAnnotationPositions: (positions: Record<string, { x: number; y: number; visible: boolean }>) => void;
     resetCameraTrigger: number;
@@ -80,12 +90,18 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
     showIons,
     metricScaleVisible,
     labelsVisible,
+    bloomEnabled = true,
+    bloomStrength = 0.36,
+    bloomThreshold = 0.82,
     cameraControlMode,
     cameraStepCommand,
     isVrModeActive,
     isStereoLensMode,
     onVrModeChange,
     onWebXrSupportDetected,
+    onUpdateVrPerformance,
+    selectedComponentKey = null,
+    focusComponentTrigger = 0,
     onSelectComponent,
     onUpdateAnnotationPositions,
     resetCameraTrigger
@@ -97,6 +113,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
     const stereoCameraRef = useRef<THREE.StereoCamera | null>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+    const composerRef = useRef<EffectComposer | null>(null);
+    const bloomPassRef = useRef<UnrealBloomPass | null>(null);
+    const bloomPulseBoostRef = useRef<number>(0);
     const customCamRef = useRef<CustomCameraController | null>(null);
     const dnaGroupRef = useRef<THREE.Group | null>(null);
     const ionGroupRef = useRef<THREE.Group | null>(null);
@@ -111,6 +130,10 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
     const baseMeshesRef = useRef<Record<string, THREE.Object3D[]>>({
         A: [], T: [], G: [], C: [], backbone: [], hbond: [], methylation: [], thymine_dimer: [], intercalator: [], ion_mg: [], water_hydration: []
     });
+    const backboneFocusNodesRef = useRef<THREE.Object3D[]>([]);
+    const focusedTargetRef = useRef<{ object: THREE.Object3D; localCenter: THREE.Vector3; type: string } | null>(null);
+    const focusCycleIndexRef = useRef<{ type: string; index: number }>({ type: '', index: 0 });
+    const last3dClickedRef = useRef<{ type: string; object: THREE.Object3D; time: number } | null>(null);
     const bioObjectsRef = useRef<THREE.Object3D[]>([]);
     const cpkObjectsRef = useRef<THREE.Object3D[]>([]);
     const ballStickObjectsRef = useRef<THREE.Object3D[]>([]);
@@ -160,6 +183,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         showIons,
         metricScaleVisible,
         labelsVisible,
+        bloomEnabled,
+        bloomStrength,
+        bloomThreshold,
         cameraControlMode,
         isVrModeActive,
         isStereoLensMode
@@ -178,11 +204,19 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             showIons,
             metricScaleVisible,
             labelsVisible,
+            bloomEnabled,
+            bloomStrength,
+            bloomThreshold,
             cameraControlMode,
             isVrModeActive,
             isStereoLensMode
         };
-    }, [conformation, renderMode, condition, assemblyMode, sequence, activeFilter, autoRotate, thermalDynamics, showIons, metricScaleVisible, labelsVisible, cameraControlMode, isVrModeActive, isStereoLensMode]);
+        if (bloomPassRef.current) {
+            bloomPassRef.current.enabled = bloomEnabled;
+            bloomPassRef.current.strength = bloomStrength + bloomPulseBoostRef.current;
+            bloomPassRef.current.threshold = bloomThreshold;
+        }
+    }, [conformation, renderMode, condition, assemblyMode, sequence, activeFilter, autoRotate, thermalDynamics, showIons, metricScaleVisible, labelsVisible, bloomEnabled, bloomStrength, bloomThreshold, cameraControlMode, isVrModeActive, isStereoLensMode]);
 
     // Setup Three.js Scene
     useEffect(() => {
@@ -203,6 +237,21 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         scene.fog = new THREE.FogExp2(0x06152d, 0.0055);
         sceneRef.current = scene;
 
+        // Procedural Deep Cryo-Space Bioluminescent Background Texture for HDR Post-Processing
+        const bgCanvas = document.createElement('canvas');
+        bgCanvas.width = 512;
+        bgCanvas.height = 512;
+        const bgCtx = bgCanvas.getContext('2d')!;
+        const bgGrad = bgCtx.createRadialGradient(330, 200, 20, 256, 256, 380);
+        bgGrad.addColorStop(0, '#0b2b52');
+        bgGrad.addColorStop(0.45, '#061935');
+        bgGrad.addColorStop(1, '#020914');
+        bgCtx.fillStyle = bgGrad;
+        bgCtx.fillRect(0, 0, 512, 512);
+        const bgTexture = new THREE.CanvasTexture(bgCanvas);
+        bgTexture.colorSpace = THREE.SRGBColorSpace;
+        scene.background = bgTexture;
+
         const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 1000);
         cameraRef.current = camera;
 
@@ -212,13 +261,13 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
         const renderer = new THREE.WebGLRenderer({
             antialias: !isSoftwareGl,
-            alpha: true,
+            alpha: false,
             powerPreference: 'high-performance'
         });
         renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.15;
+        renderer.toneMappingExposure = 0.96;
         renderer.outputColorSpace = THREE.SRGBColorSpace;
 
         // Enable WebXR Immersive VR Support
@@ -231,6 +280,37 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
         container.appendChild(renderer.domElement);
         rendererRef.current = renderer;
+
+        // =====================================================================
+        // POST-PROCESSING PIPELINE: EffectComposer + RenderPass + UnrealBloomPass + OutputPass
+        // =====================================================================
+        const composerRenderTarget = new THREE.WebGLRenderTarget(
+            window.innerWidth,
+            window.innerHeight,
+            {
+                type: THREE.HalfFloatType,
+                format: THREE.RGBAFormat,
+                samples: isSoftwareGl ? 0 : 4
+            }
+        );
+        const composer = new EffectComposer(renderer, composerRenderTarget);
+        const renderPass = new RenderPass(scene, camera);
+        composer.addPass(renderPass);
+
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            stateRef.current.bloomStrength,  // strength: refined jewel-like neon halo without glare
+            0.36,                            // radius: tight, crisp optical glow spread
+            stateRef.current.bloomThreshold  // threshold: selective HDR emission threshold
+        );
+        bloomPass.enabled = stateRef.current.bloomEnabled;
+        composer.addPass(bloomPass);
+
+        const outputPass = new OutputPass();
+        composer.addPass(outputPass);
+
+        composerRef.current = composer;
+        bloomPassRef.current = bloomPass;
 
         // Probe WebXR headset capability
         const xrNav = (navigator as any).xr;
@@ -288,6 +368,8 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             },
 
             applyScreenPanDelta: (deltaPixelsX: number, deltaPixelsY: number, viewportHeight: number) => {
+                // Disengage automatic component focus tracking when user manually pans
+                focusedTargetRef.current = null;
                 const safeHeight = Math.max(viewportHeight, 1);
                 const vFovRad = THREE.MathUtils.degToRad(camera.fov);
                 // Exact 1:1 world units per pixel at the focal target plane
@@ -314,6 +396,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             },
 
             resetToDefault: (aspect: number, instant = false) => {
+                focusedTargetRef.current = null;
                 const pose = getDefaultCameraPose(aspect);
                 camera.aspect = aspect;
                 camera.fov = pose.fov;
@@ -361,30 +444,30 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         };
 
 
-        // Studio 4-Point Specular & PBR Lighting Rig for Metallic/Roughness Highlights
-        const ambientLight = new THREE.AmbientLight(0x0d2244, 0.55);
+        // Studio 4-Point Specular & PBR Lighting Rig (Calibrated for High-Contrast Anti-Glare Clarity)
+        const ambientLight = new THREE.AmbientLight(0x0d2244, 0.48);
         scene.add(ambientLight);
 
-        const hemiLight = new THREE.HemisphereLight(0x7dd3fc, 0x051024, 0.72);
+        const hemiLight = new THREE.HemisphereLight(0x7dd3fc, 0x051024, 0.62);
         scene.add(hemiLight);
 
-        const keyLight = new THREE.DirectionalLight(0xfffaf2, 2.15);
+        const keyLight = new THREE.DirectionalLight(0xfffaf2, 1.62);
         keyLight.position.set(-28, 44, 40);
         scene.add(keyLight);
 
-        const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.95);
+        const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.78);
         fillLight.position.set(36, -16, 32);
         scene.add(fillLight);
 
-        const rimLight = new THREE.DirectionalLight(0xbae6fd, 1.85);
+        const rimLight = new THREE.DirectionalLight(0xbae6fd, 1.35);
         rimLight.position.set(14, 34, -44);
         scene.add(rimLight);
 
-        const rimLight2 = new THREE.DirectionalLight(0x818cf8, 1.15);
+        const rimLight2 = new THREE.DirectionalLight(0x818cf8, 0.88);
         rimLight2.position.set(-28, -32, -28);
         scene.add(rimLight2);
 
-        const specularPointLight = new THREE.PointLight(0xe0f2fe, 1.6, 110, 1.5);
+        const specularPointLight = new THREE.PointLight(0xe0f2fe, 1.15, 110, 1.6);
         specularPointLight.position.set(16, 18, 28);
         scene.add(specularPointLight);
 
@@ -462,7 +545,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
             // Crisp chemical symbol
             c.fillStyle = '#ffffff';
-            c.font = '800 132px "Orbitron", "Inter", sans-serif';
+            c.font = '700 132px "JetBrains Mono", "Plus Jakarta Sans", sans-serif';
             c.textAlign = 'center';
             c.textBaseline = 'middle';
             c.fillText(letter, 128, 134);
@@ -634,50 +717,50 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const normalScaleBackbone = new THREE.Vector2(0.32, 0.32);
         const normalScaleSubtle = new THREE.Vector2(0.16, 0.16);
 
-        // Physically-Based Materials (MeshPhysicalMaterial & MeshStandardMaterial) with Metallic, Roughness & Normal Maps
+        // Physically-Based Materials (MeshPhysicalMaterial & MeshStandardMaterial) with Metallic, Roughness, Normal Maps & Anti-Glare Jewel Bloom Accents
         const materials = {
             backbone: new THREE.MeshPhysicalMaterial({
                 color: 0x6366f1,
-                roughness: 0.28,
+                roughness: 0.27,
                 metalness: 0.44,
                 roughnessMap: pbrMaps.backboneRoughnessMap,
                 metalnessMap: pbrMaps.backboneMetalnessMap,
                 normalMap: pbrMaps.backboneNormalMap,
                 normalScale: normalScaleBackbone,
-                clearcoat: 0.92,
+                clearcoat: 0.90,
                 clearcoatRoughness: 0.12,
                 clearcoatNormalMap: pbrMaps.normalMap,
                 clearcoatNormalScale: normalScaleSubtle,
                 ior: 1.56,
-                reflectivity: 0.9,
-                iridescence: 0.32,
+                reflectivity: 0.88,
+                iridescence: 0.34,
                 iridescenceIOR: 1.38,
-                sheen: 0.35,
+                sheen: 0.38,
                 sheenColor: new THREE.Color(0x38bdf8),
-                emissive: 0x1e1b4b,
-                emissiveIntensity: 0.14,
-                envMapIntensity: 1.55
+                emissive: 0x312e81,
+                emissiveIntensity: 0.22,
+                envMapIntensity: 1.32
             }),
             backboneRail: new THREE.MeshPhysicalMaterial({
                 color: 0x38bdf8,
-                roughness: 0.20,
+                roughness: 0.18,
                 metalness: 0.68,
                 roughnessMap: pbrMaps.backboneRoughnessMap,
                 metalnessMap: pbrMaps.backboneMetalnessMap,
                 normalMap: pbrMaps.backboneNormalMap,
                 normalScale: normalScaleBackbone,
-                clearcoat: 0.96,
+                clearcoat: 0.94,
                 clearcoatRoughness: 0.08,
                 ior: 1.62,
-                reflectivity: 1.0,
-                emissive: 0x0284c7,
-                emissiveIntensity: 0.18,
-                envMapIntensity: 1.75
+                reflectivity: 0.95,
+                emissive: 0x0ea5e9,
+                emissiveIntensity: 0.56,
+                envMapIntensity: 1.45
             }),
-            // Covalent heterocyclic ring frame & bond materials with PBR metallic/roughness maps
+            // Covalent heterocyclic ring frame & bond materials with PBR metallic/roughness maps and controlled neon accent
             A: new THREE.MeshPhysicalMaterial({
                 color: 0x2563eb,
-                roughness: 0.26,
+                roughness: 0.25,
                 metalness: 0.42,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
@@ -686,14 +769,14 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 clearcoat: 0.88,
                 clearcoatRoughness: 0.12,
                 ior: 1.54,
-                reflectivity: 0.88,
-                emissive: 0x072066,
-                emissiveIntensity: 0.14,
-                envMapIntensity: 1.45
+                reflectivity: 0.86,
+                emissive: 0x1d4ed8,
+                emissiveIntensity: 0.22,
+                envMapIntensity: 1.28
             }),
             T: new THREE.MeshPhysicalMaterial({
                 color: 0xf59e0b,
-                roughness: 0.26,
+                roughness: 0.25,
                 metalness: 0.42,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
@@ -702,14 +785,14 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 clearcoat: 0.88,
                 clearcoatRoughness: 0.12,
                 ior: 1.54,
-                reflectivity: 0.88,
-                emissive: 0x593c00,
-                emissiveIntensity: 0.14,
-                envMapIntensity: 1.45
+                reflectivity: 0.86,
+                emissive: 0xb45309,
+                emissiveIntensity: 0.20,
+                envMapIntensity: 1.28
             }),
             G: new THREE.MeshPhysicalMaterial({
                 color: 0x10b981,
-                roughness: 0.26,
+                roughness: 0.25,
                 metalness: 0.42,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
@@ -718,14 +801,14 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 clearcoat: 0.88,
                 clearcoatRoughness: 0.12,
                 ior: 1.54,
-                reflectivity: 0.88,
-                emissive: 0x00471b,
-                emissiveIntensity: 0.14,
-                envMapIntensity: 1.45
+                reflectivity: 0.86,
+                emissive: 0x047857,
+                emissiveIntensity: 0.22,
+                envMapIntensity: 1.28
             }),
             C: new THREE.MeshPhysicalMaterial({
                 color: 0xf43f5e,
-                roughness: 0.26,
+                roughness: 0.25,
                 metalness: 0.42,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
@@ -734,12 +817,12 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 clearcoat: 0.88,
                 clearcoatRoughness: 0.12,
                 ior: 1.54,
-                reflectivity: 0.88,
-                emissive: 0x590012,
-                emissiveIntensity: 0.14,
-                envMapIntensity: 1.45
+                reflectivity: 0.86,
+                emissive: 0xbe123c,
+                emissiveIntensity: 0.22,
+                envMapIntensity: 1.28
             }),
-            // Crystalline Aromatic Pi-Cloud Ring Fill with PBR roughness/metalness/normal maps & iridescence
+            // Crystalline Aromatic Pi-Cloud Ring Fill with PBR roughness/metalness/normal maps & jewel-like translucency
             ringFill: {
                 A: new THREE.MeshPhysicalMaterial({
                     color: 0x3b82f6,
@@ -749,16 +832,16 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     metalnessMap: pbrMaps.metalnessMap,
                     normalMap: pbrMaps.normalMap,
                     normalScale: normalScaleSubtle,
-                    clearcoat: 0.95,
-                    clearcoatRoughness: 0.08,
+                    clearcoat: 0.92,
+                    clearcoatRoughness: 0.09,
                     ior: 1.58,
                     iridescence: 0.38,
                     iridescenceIOR: 1.4,
                     transparent: true,
-                    opacity: 0.60,
+                    opacity: 0.58,
                     emissive: 0x1d4ed8,
-                    emissiveIntensity: 0.18,
-                    envMapIntensity: 1.6,
+                    emissiveIntensity: 0.32,
+                    envMapIntensity: 1.35,
                     side: THREE.DoubleSide,
                     depthWrite: false
                 }),
@@ -770,16 +853,16 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     metalnessMap: pbrMaps.metalnessMap,
                     normalMap: pbrMaps.normalMap,
                     normalScale: normalScaleSubtle,
-                    clearcoat: 0.95,
-                    clearcoatRoughness: 0.08,
+                    clearcoat: 0.92,
+                    clearcoatRoughness: 0.09,
                     ior: 1.58,
                     iridescence: 0.38,
                     iridescenceIOR: 1.4,
                     transparent: true,
-                    opacity: 0.60,
-                    emissive: 0xb45309,
-                    emissiveIntensity: 0.18,
-                    envMapIntensity: 1.6,
+                    opacity: 0.58,
+                    emissive: 0xd97706,
+                    emissiveIntensity: 0.30,
+                    envMapIntensity: 1.35,
                     side: THREE.DoubleSide,
                     depthWrite: false
                 }),
@@ -791,16 +874,16 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     metalnessMap: pbrMaps.metalnessMap,
                     normalMap: pbrMaps.normalMap,
                     normalScale: normalScaleSubtle,
-                    clearcoat: 0.95,
-                    clearcoatRoughness: 0.08,
+                    clearcoat: 0.92,
+                    clearcoatRoughness: 0.09,
                     ior: 1.58,
                     iridescence: 0.38,
                     iridescenceIOR: 1.4,
                     transparent: true,
-                    opacity: 0.60,
-                    emissive: 0x047857,
-                    emissiveIntensity: 0.18,
-                    envMapIntensity: 1.6,
+                    opacity: 0.58,
+                    emissive: 0x059669,
+                    emissiveIntensity: 0.32,
+                    envMapIntensity: 1.35,
                     side: THREE.DoubleSide,
                     depthWrite: false
                 }),
@@ -812,16 +895,16 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     metalnessMap: pbrMaps.metalnessMap,
                     normalMap: pbrMaps.normalMap,
                     normalScale: normalScaleSubtle,
-                    clearcoat: 0.95,
-                    clearcoatRoughness: 0.08,
+                    clearcoat: 0.92,
+                    clearcoatRoughness: 0.09,
                     ior: 1.58,
                     iridescence: 0.38,
                     iridescenceIOR: 1.4,
                     transparent: true,
-                    opacity: 0.60,
-                    emissive: 0xbe123c,
-                    emissiveIntensity: 0.18,
-                    envMapIntensity: 1.6,
+                    opacity: 0.58,
+                    emissive: 0xe11d48,
+                    emissiveIntensity: 0.32,
+                    envMapIntensity: 1.35,
                     side: THREE.DoubleSide,
                     depthWrite: false
                 }),
@@ -833,15 +916,15 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     metalnessMap: pbrMaps.metalnessMap,
                     normalMap: pbrMaps.normalMap,
                     normalScale: normalScaleSubtle,
-                    clearcoat: 0.9,
+                    clearcoat: 0.90,
                     clearcoatRoughness: 0.1,
                     ior: 1.52,
                     iridescence: 0.28,
                     transparent: true,
                     opacity: 0.48,
-                    emissive: 0x312e81,
-                    emissiveIntensity: 0.14,
-                    envMapIntensity: 1.5,
+                    emissive: 0x3730a3,
+                    emissiveIntensity: 0.20,
+                    envMapIntensity: 1.30,
                     side: THREE.DoubleSide,
                     depthWrite: false
                 })
@@ -849,13 +932,13 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             hbondDot: new THREE.MeshPhysicalMaterial({
                 color: 0xe0f2fe,
                 roughness: 0.14,
-                metalness: 0.55,
+                metalness: 0.54,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 clearcoat: 0.95,
                 emissive: 0x38bdf8,
-                emissiveIntensity: 0.65,
-                envMapIntensity: 1.6
+                emissiveIntensity: 0.92,
+                envMapIntensity: 1.45
             }),
             hbondGlowTube: new THREE.MeshPhysicalMaterial({
                 color: 0x38bdf8,
@@ -863,28 +946,28 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 metalness: 0.25,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
-                clearcoat: 0.9,
+                clearcoat: 0.90,
                 transparent: true,
-                opacity: 0.22,
+                opacity: 0.20,
                 emissive: 0x0284c7,
-                emissiveIntensity: 0.45,
-                envMapIntensity: 1.4,
+                emissiveIntensity: 0.58,
+                envMapIntensity: 1.3,
                 blending: THREE.AdditiveBlending,
                 depthWrite: false
             }),
             sugarNode: new THREE.MeshPhysicalMaterial({
                 color: 0x818cf8,
-                roughness: 0.26,
+                roughness: 0.25,
                 metalness: 0.38,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleStandard,
-                clearcoat: 0.85,
+                clearcoat: 0.86,
                 clearcoatRoughness: 0.12,
-                emissive: 0x1e1b4b,
-                emissiveIntensity: 0.15,
-                envMapIntensity: 1.45
+                emissive: 0x312e81,
+                emissiveIntensity: 0.18,
+                envMapIntensity: 1.32
             }),
             phosphateNode: new THREE.MeshPhysicalMaterial({
                 color: 0xf59e0b,
@@ -896,9 +979,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 normalScale: normalScaleStandard,
                 clearcoat: 0.92,
                 clearcoatRoughness: 0.10,
-                emissive: 0x78350f,
-                emissiveIntensity: 0.22,
-                envMapIntensity: 1.65
+                emissive: 0xb45309,
+                emissiveIntensity: 0.38,
+                envMapIntensity: 1.42
             }),
             cpk: {
                 C: new THREE.MeshPhysicalMaterial({
@@ -911,7 +994,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     normalScale: normalScaleStandard,
                     clearcoat: 0.78,
                     clearcoatRoughness: 0.16,
-                    envMapIntensity: 1.45
+                    envMapIntensity: 1.3
                 }),
                 N: new THREE.MeshPhysicalMaterial({
                     color: 0x2563eb,
@@ -923,9 +1006,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     normalScale: normalScaleStandard,
                     clearcoat: 0.84,
                     clearcoatRoughness: 0.14,
-                    emissive: 0x0a1e5e,
-                    emissiveIntensity: 0.12,
-                    envMapIntensity: 1.5
+                    emissive: 0x1e40af,
+                    emissiveIntensity: 0.18,
+                    envMapIntensity: 1.35
                 }),
                 O: new THREE.MeshPhysicalMaterial({
                     color: 0xef4444,
@@ -937,9 +1020,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     normalScale: normalScaleStandard,
                     clearcoat: 0.88,
                     clearcoatRoughness: 0.12,
-                    emissive: 0x450a0a,
-                    emissiveIntensity: 0.14,
-                    envMapIntensity: 1.55
+                    emissive: 0x991b1b,
+                    emissiveIntensity: 0.20,
+                    envMapIntensity: 1.38
                 }),
                 P: new THREE.MeshPhysicalMaterial({
                     color: 0xf59e0b,
@@ -949,33 +1032,35 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     metalnessMap: pbrMaps.metalnessMap,
                     normalMap: pbrMaps.normalMap,
                     normalScale: normalScaleStandard,
-                    clearcoat: 0.9,
+                    clearcoat: 0.90,
                     clearcoatRoughness: 0.10,
-                    emissive: 0x451a03,
-                    emissiveIntensity: 0.18,
-                    envMapIntensity: 1.65
+                    emissive: 0xb45309,
+                    emissiveIntensity: 0.32,
+                    envMapIntensity: 1.42
                 }),
                 H: new THREE.MeshPhysicalMaterial({
-                    color: 0xf1f5f9,
+                    color: 0xe2e8f0,
                     roughness: 0.24,
-                    metalness: 0.25,
+                    metalness: 0.24,
                     roughnessMap: pbrMaps.roughnessMap,
                     metalnessMap: pbrMaps.metalnessMap,
                     normalMap: pbrMaps.normalMap,
                     normalScale: normalScaleSubtle,
                     clearcoat: 0.82,
                     clearcoatRoughness: 0.12,
-                    envMapIntensity: 1.4
+                    emissive: 0x38bdf8,
+                    emissiveIntensity: 0.10,
+                    envMapIntensity: 1.25
                 }),
                 bond: new THREE.MeshStandardMaterial({
                     color: 0x94a3b8,
-                    roughness: 0.24,
-                    metalness: 0.72,
+                    roughness: 0.25,
+                    metalness: 0.68,
                     roughnessMap: pbrMaps.roughnessMap,
                     metalnessMap: pbrMaps.metalnessMap,
                     normalMap: pbrMaps.normalMap,
                     normalScale: normalScaleStandard,
-                    envMapIntensity: 1.65
+                    envMapIntensity: 1.38
                 })
             }
         };
@@ -984,29 +1069,29 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const conditionMaterials = {
             methylCarbon: new THREE.MeshPhysicalMaterial({
                 color: 0xc084fc,
-                roughness: 0.24,
-                metalness: 0.44,
-                roughnessMap: pbrMaps.roughnessMap,
-                metalnessMap: pbrMaps.metalnessMap,
-                normalMap: pbrMaps.normalMap,
-                normalScale: normalScaleStandard,
-                clearcoat: 0.85,
-                emissive: 0x581c87,
-                emissiveIntensity: 0.28,
-                envMapIntensity: 1.5
-            }),
-            dimerBridge: new THREE.MeshPhysicalMaterial({
-                color: 0xfb923c,
                 roughness: 0.22,
-                metalness: 0.55,
+                metalness: 0.46,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleStandard,
                 clearcoat: 0.88,
-                emissive: 0x9a3412,
-                emissiveIntensity: 0.35,
-                envMapIntensity: 1.55
+                emissive: 0x7e22ce,
+                emissiveIntensity: 0.58,
+                envMapIntensity: 1.4
+            }),
+            dimerBridge: new THREE.MeshPhysicalMaterial({
+                color: 0xfb923c,
+                roughness: 0.20,
+                metalness: 0.56,
+                roughnessMap: pbrMaps.roughnessMap,
+                metalnessMap: pbrMaps.metalnessMap,
+                normalMap: pbrMaps.normalMap,
+                normalScale: normalScaleStandard,
+                clearcoat: 0.90,
+                emissive: 0xc2410c,
+                emissiveIntensity: 0.66,
+                envMapIntensity: 1.45
             }),
             intercalatorPlate: new THREE.MeshPhysicalMaterial({
                 color: 0xf43f5e,
@@ -1018,35 +1103,37 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 normalScale: normalScaleStandard,
                 clearcoat: 0.94,
                 iridescence: 0.45,
-                emissive: 0x9f1239,
-                emissiveIntensity: 0.38,
-                envMapIntensity: 1.65
+                emissive: 0xbe123c,
+                emissiveIntensity: 0.68,
+                envMapIntensity: 1.5
             }),
             ionMg: new THREE.MeshStandardMaterial({
                 color: 0x2dd4bf,
                 roughness: 0.15,
-                metalness: 0.88,
+                metalness: 0.85,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleSubtle,
-                emissive: 0x115e59,
-                emissiveIntensity: 0.35,
-                envMapIntensity: 1.85
+                emissive: 0x0f766e,
+                emissiveIntensity: 0.62,
+                envMapIntensity: 1.55
             }),
             waterO: new THREE.MeshPhysicalMaterial({
                 color: 0x67e8f9,
                 transparent: true,
                 opacity: 0.82,
-                roughness: 0.12,
-                metalness: 0.18,
+                roughness: 0.14,
+                metalness: 0.20,
                 roughnessMap: pbrMaps.roughnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleSubtle,
-                clearcoat: 0.98,
+                clearcoat: 0.96,
                 ior: 1.333,
-                reflectivity: 0.9,
-                envMapIntensity: 1.6
+                reflectivity: 0.90,
+                emissive: 0x0891b2,
+                emissiveIntensity: 0.28,
+                envMapIntensity: 1.4
             })
         };
         conditionMaterialsRef.current = conditionMaterials;
@@ -1054,42 +1141,42 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const electroMaterials = {
             backbone: new THREE.MeshPhysicalMaterial({
                 color: 0xef4444,
-                roughness: 0.28,
-                metalness: 0.38,
+                roughness: 0.26,
+                metalness: 0.40,
                 roughnessMap: pbrMaps.backboneRoughnessMap,
                 metalnessMap: pbrMaps.backboneMetalnessMap,
                 normalMap: pbrMaps.backboneNormalMap,
                 normalScale: normalScaleBackbone,
-                clearcoat: 0.82,
-                emissive: 0x590505,
-                emissiveIntensity: 0.2,
-                envMapIntensity: 1.45
+                clearcoat: 0.84,
+                emissive: 0x991b1b,
+                emissiveIntensity: 0.28,
+                envMapIntensity: 1.35
             }),
             baseNeutral: new THREE.MeshPhysicalMaterial({
                 color: 0xcbd5e1,
-                roughness: 0.32,
+                roughness: 0.30,
                 metalness: 0.35,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleStandard,
-                clearcoat: 0.72,
+                clearcoat: 0.74,
                 emissive: 0x1e293b,
-                emissiveIntensity: 0.1,
-                envMapIntensity: 1.35
+                emissiveIntensity: 0.12,
+                envMapIntensity: 1.25
             }),
             basePositive: new THREE.MeshPhysicalMaterial({
                 color: 0x38bdf8,
-                roughness: 0.28,
+                roughness: 0.26,
                 metalness: 0.38,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleStandard,
-                clearcoat: 0.78,
-                emissive: 0x0c4a6e,
-                emissiveIntensity: 0.15,
-                envMapIntensity: 1.45
+                clearcoat: 0.80,
+                emissive: 0x0369a1,
+                emissiveIntensity: 0.24,
+                envMapIntensity: 1.35
             })
         };
         electroMaterialsRef.current = electroMaterials;
@@ -1097,56 +1184,68 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const badgeMaterials = {
             A: new THREE.MeshPhysicalMaterial({
                 map: letterTextures.A,
+                emissiveMap: letterTextures.A,
+                emissive: new THREE.Color(0x3b82f6),
+                emissiveIntensity: 0.22,
                 roughness: 0.22,
-                metalness: 0.45,
+                metalness: 0.42,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleSubtle,
-                clearcoat: 0.9,
-                envMapIntensity: 1.45,
+                clearcoat: 0.90,
+                envMapIntensity: 1.25,
                 polygonOffset: true,
                 polygonOffsetFactor: -1,
                 polygonOffsetUnits: -1
             }),
             T: new THREE.MeshPhysicalMaterial({
                 map: letterTextures.T,
+                emissiveMap: letterTextures.T,
+                emissive: new THREE.Color(0xfbbf24),
+                emissiveIntensity: 0.22,
                 roughness: 0.22,
-                metalness: 0.45,
+                metalness: 0.42,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleSubtle,
-                clearcoat: 0.9,
-                envMapIntensity: 1.45,
+                clearcoat: 0.90,
+                envMapIntensity: 1.25,
                 polygonOffset: true,
                 polygonOffsetFactor: -1,
                 polygonOffsetUnits: -1
             }),
             G: new THREE.MeshPhysicalMaterial({
                 map: letterTextures.G,
+                emissiveMap: letterTextures.G,
+                emissive: new THREE.Color(0x10b981),
+                emissiveIntensity: 0.22,
                 roughness: 0.22,
-                metalness: 0.45,
+                metalness: 0.42,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleSubtle,
-                clearcoat: 0.9,
-                envMapIntensity: 1.45,
+                clearcoat: 0.90,
+                envMapIntensity: 1.25,
                 polygonOffset: true,
                 polygonOffsetFactor: -1,
                 polygonOffsetUnits: -1
             }),
             C: new THREE.MeshPhysicalMaterial({
                 map: letterTextures.C,
+                emissiveMap: letterTextures.C,
+                emissive: new THREE.Color(0xf43f5e),
+                emissiveIntensity: 0.22,
                 roughness: 0.22,
-                metalness: 0.45,
+                metalness: 0.42,
                 roughnessMap: pbrMaps.roughnessMap,
                 metalnessMap: pbrMaps.metalnessMap,
                 normalMap: pbrMaps.normalMap,
                 normalScale: normalScaleSubtle,
-                clearcoat: 0.9,
-                envMapIntensity: 1.45,
+                clearcoat: 0.90,
+                envMapIntensity: 1.25,
                 polygonOffset: true,
                 polygonOffsetFactor: -1,
                 polygonOffsetUnits: -1
@@ -1403,8 +1502,10 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 const hitObj = hits[0].object;
                 const type = hitObj.userData.type;
                 if (type) {
-                    onSelectComponent(type);
                     const tg = hitObj.userData.parentGroup || hitObj;
+                    last3dClickedRef.current = { type, object: tg, time: performance.now() };
+                    onSelectComponent(type);
+                    bloomPulseBoostRef.current = 0.20;
                     const origScale = tg.scale.clone();
                     animateVector(tg.scale, origScale.clone().multiplyScalar(1.25), 200, easeOutBack);
                     setTimeout(() => animateVector(tg.scale, origScale, 300, easeInOutCubic), 220);
@@ -1629,8 +1730,20 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
         // WebXR-Compatible Render Loop via setAnimationLoop
         let thermalPhase = 0;
+        let prevFrameTimestamp = performance.now();
+        let smoothedFrameIntervalMs = 11.1;
+        let smoothedGpuPipelineMs = 3.2;
+        let lastTelemetryEmitTime = 0;
 
         const render = (now: number) => {
+            const frameStartPerf = performance.now();
+            const rawDeltaMs = now - prevFrameTimestamp;
+            prevFrameTimestamp = now;
+
+            if (rawDeltaMs > 1 && rawDeltaMs < 200) {
+                smoothedFrameIntervalMs = smoothedFrameIntervalMs * 0.88 + rawDeltaMs * 0.12;
+            }
+
             // Update tweens
             for (let i = activeTweensRef.current.length - 1; i >= 0; i--) {
                 if (activeTweensRef.current[i].update(now)) {
@@ -1638,7 +1751,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 }
             }
 
-            // 37°C Thermal Brownian Dynamics
+            // 37°C Thermal Brownian Dynamics & Quantum H-Bond Emissive Shimmer
             if (stateRef.current.thermalDynamics && stateRef.current.assemblyMode === 'assembled') {
                 thermalPhase += 0.04;
                 const amp = 0.045;
@@ -1653,11 +1766,26 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                         c.rotation.y = waveRot;
                     }
                 }
+                const hbondPulse = Math.sin(thermalPhase * 1.2) * 0.08;
+                materials.hbondDot.emissiveIntensity = 0.92 + hbondPulse;
+                materials.hbondGlowTube.emissiveIntensity = 0.58 + hbondPulse * 0.5;
             }
+
+            // Decay interactive selection bloom pulse smoothly
+            if (bloomPulseBoostRef.current > 0.001) {
+                bloomPulseBoostRef.current *= 0.90;
+                if (bloomPulseBoostRef.current < 0.002) bloomPulseBoostRef.current = 0;
+            }
+            bloomPass.enabled = stateRef.current.bloomEnabled;
+            bloomPass.strength = stateRef.current.bloomStrength + bloomPulseBoostRef.current;
+            bloomPass.threshold = stateRef.current.bloomThreshold;
 
             // Auto Rotation
             if (stateRef.current.autoRotate && dnaGroupRef.current) {
                 dnaGroupRef.current.rotation.y += 0.0035;
+                if (focusedTargetRef.current && customCamRef.current && activePointers.size === 0) {
+                    customCamRef.current.sphericalTarget.theta += 0.0035;
+                }
             }
 
             // Background particles & VR dome subtle rotation
@@ -1667,6 +1795,23 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             if (vrEnvGroupRef.current && vrEnvGroupRef.current.visible) {
                 vrDomeWire.rotation.y += 0.0003;
             }
+
+            // Emit throttled XR latency & frame rate telemetry when VR mode is active
+            const emitVrPerformanceIfNeeded = () => {
+                if ((stateRef.current.isVrModeActive || renderer.xr.isPresenting) && onUpdateVrPerformance) {
+                    const frameExecMs = Math.max(0.8, performance.now() - frameStartPerf);
+                    smoothedGpuPipelineMs = smoothedGpuPipelineMs * 0.85 + frameExecMs * 0.15;
+                    if (now - lastTelemetryEmitTime > 480) {
+                        lastTelemetryEmitTime = now;
+                        // Motion-to-photon latency combines vsync interval half-period + render pipeline execution
+                        const latencyMs = Number(
+                            THREE.MathUtils.clamp(smoothedFrameIntervalMs * 0.55 + smoothedGpuPipelineMs + 2.4, 6.2, 48.0).toFixed(1)
+                        );
+                        const fps = Math.round(THREE.MathUtils.clamp(1000 / Math.max(smoothedFrameIntervalMs, 6.5), 24, 120));
+                        onUpdateVrPerformance({ latencyMs, fps });
+                    }
+                }
+            };
 
             // Poll WebXR Headset Controller Thumbsticks when presenting in VR
             if (renderer.xr.isPresenting && dnaGroupRef.current) {
@@ -1690,14 +1835,31 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     }
                 }
                 renderer.render(scene, camera);
+                emitVrPerformanceIfNeeded();
                 return;
+            }
+
+            // Live Auto-Focus Camera Tracking: keep panTarget centered on the inspected molecular component
+            if (focusedTargetRef.current && customCamRef.current && dnaGroupRef.current) {
+                const ft = focusedTargetRef.current;
+                if (ft.object.parent) {
+                    dnaGroupRef.current.updateMatrixWorld(true);
+                    const liveWorldPos = ft.localCenter.clone();
+                    ft.object.localToWorld(liveWorldPos);
+                    const lim = customCamRef.current.panLimit;
+                    customCamRef.current.panTarget.set(
+                        THREE.MathUtils.clamp(liveWorldPos.x, -lim, lim),
+                        THREE.MathUtils.clamp(liveWorldPos.y, -lim, lim),
+                        THREE.MathUtils.clamp(liveWorldPos.z, -lim, lim)
+                    );
+                }
             }
 
             if (customCamRef.current) {
                 customCamRef.current.update();
             }
 
-            // Stereoscopic Side-by-Side (SBS) VR Lens Mode vs Standard/360 Panoramic Render
+            // Stereoscopic Side-by-Side (SBS) VR Lens Mode vs Standard/360 Panoramic Render with UnrealBloomPass
             if (stateRef.current.isVrModeActive && stateRef.current.isStereoLensMode && stereoCameraRef.current) {
                 const w = window.innerWidth;
                 const h = window.innerHeight;
@@ -1726,8 +1888,13 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             } else {
                 renderer.setScissorTest(false);
                 renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
-                renderer.render(scene, camera);
+                if (stateRef.current.bloomEnabled) {
+                    composer.render();
+                } else {
+                    renderer.render(scene, camera);
+                }
             }
+            emitVrPerformanceIfNeeded();
 
             // Project 3D positions to screen for overlay callouts
             if (dnaGroupRef.current && cameraRef.current) {
@@ -1782,7 +1949,11 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
         const handleResize = () => {
             if (!rendererRef.current || !cameraRef.current || rendererRef.current.xr.isPresenting) return;
-            rendererRef.current.setSize(window.innerWidth, window.innerHeight);
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            rendererRef.current.setSize(w, h);
+            composer.setSize(w, h);
+            bloomPass.resolution.set(w, h);
             adjustCameraOnResize();
         };
         window.addEventListener('resize', handleResize);
@@ -1805,11 +1976,16 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             domEl.removeEventListener('wheel', handleWheel);
             Object.values(pbrMaps).forEach(tex => tex.dispose());
             Object.values(letterTextures).forEach(tex => tex.dispose());
+            bgTexture.dispose();
             envTexture.dispose();
             vrDomeGeo.dispose();
             vrDomeWireGeo.dispose();
             horizonRingGeo.dispose();
             laserGeo.dispose();
+            bloomPass.dispose();
+            outputPass.dispose();
+            composer.dispose();
+            composerRenderTarget.dispose();
             if (renderer.domElement && container.contains(renderer.domElement)) {
                 container.removeChild(renderer.domElement);
             }
@@ -1887,6 +2063,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 cam.applyScreenPanDelta(-panPixels, 0, vh);
                 break;
             case 'center_pan':
+                focusedTargetRef.current = null;
                 cam.panTarget.set(0, 0, 0);
                 break;
             case 'rotate_left':
@@ -1964,6 +2141,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         strand1MeshesRef.current = [];
         strand2MeshesRef.current = [];
         baseMeshesRef.current = { A: [], T: [], G: [], C: [], backbone: [], hbond: [], methylation: [], thymine_dimer: [], intercalator: [], ion_mg: [], water_hydration: [] };
+        backboneFocusNodesRef.current = [];
         bioObjectsRef.current = [];
         cpkObjectsRef.current = [];
         ballStickObjectsRef.current = [];
@@ -2083,6 +2261,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             const fFill = new THREE.Mesh(geos.furanoseFillGeo, materials.ringFill.sugar);
             sugarGroup.add(fFill);
             targetGroup.add(sugarGroup);
+            backboneFocusNodesRef.current.push(phosGroup, sugarGroup);
 
             // 3. Beta-N-Glycosidic Bond (C1' -> N9 of Purine or N1 of Pyrimidine)
             const glycosidicAnchor = new THREE.Vector3(0.0, 0.0, 1.48);
@@ -2491,6 +2670,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
                 if (b1Type === 'C') addMethylGroup(bioBase1, isPurine1, 1);
                 if (b2Type === 'C') addMethylGroup(bioBase2, isPurine2, -1);
+                if (i === midIdx && b1Type !== 'C' && b2Type !== 'C') {
+                    addMethylGroup(bioBase1, false, 1);
+                }
             }
 
             if (condition === 'thymine_dimer' && i === midIdx) {
@@ -2803,6 +2985,161 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         applyFilter(activeFilter);
     }, [conformation, condition, sequence]);
 
+    // Auto-Focus Camera on Selected Molecular Component (from InspectorPanel or 3D Click)
+    useEffect(() => {
+        const cam = customCamRef.current;
+        const dnaGroup = dnaGroupRef.current;
+        if (!cam || !dnaGroup) return;
+
+        if (!selectedComponentKey) {
+            if (focusedTargetRef.current) {
+                focusedTargetRef.current = null;
+                cam.panTarget.set(0, 0, 0);
+                const aspect = window.innerWidth / Math.max(window.innerHeight, 1);
+                const defaultPose = getDefaultCameraPose(aspect);
+                cam.sphericalTarget.radius = defaultPose.position.length();
+            }
+            return;
+        }
+
+        dnaGroup.updateMatrixWorld(true);
+
+        let targetObj: THREE.Object3D | null = null;
+        let wasDirect3dClick = false;
+
+        // 1. If the user just clicked a specific 3D mesh directly, focus on that exact clicked instance
+        if (
+            last3dClickedRef.current &&
+            last3dClickedRef.current.type === selectedComponentKey &&
+            performance.now() - last3dClickedRef.current.time < 350 &&
+            last3dClickedRef.current.object.parent
+        ) {
+            targetObj = last3dClickedRef.current.object;
+            wasDirect3dClick = true;
+            last3dClickedRef.current = null;
+        } else {
+            // 2. Selected via InspectorPanel: gather candidate 3D objects for this component key
+            let candidates: THREE.Object3D[] = [];
+            if (selectedComponentKey === 'backbone' && backboneFocusNodesRef.current.length > 0) {
+                candidates = backboneFocusNodesRef.current;
+            } else if (baseMeshesRef.current[selectedComponentKey] && baseMeshesRef.current[selectedComponentKey].length > 0) {
+                candidates = baseMeshesRef.current[selectedComponentKey];
+            } else {
+                candidates = allInteractiveMeshesRef.current.filter(
+                    m => m && m.userData && m.userData.type === selectedComponentKey
+                );
+            }
+
+            if (candidates.length > 0) {
+                // Rank candidates by proximity to the vertical center (y = 0) of the DNA helix
+                const scored = candidates
+                    .filter(obj => !!obj && !!obj.parent)
+                    .map(obj => {
+                        const b = new THREE.Box3().setFromObject(obj);
+                        const center = new THREE.Vector3();
+                        if (!b.isEmpty()) {
+                            b.getCenter(center);
+                        } else {
+                            obj.getWorldPosition(center);
+                        }
+                        return { obj, center, distFromMidY: Math.abs(center.y) };
+                    })
+                    .sort((a, b) => a.distFromMidY - b.distFromMidY);
+
+                if (scored.length > 0) {
+                    const poolSize = Math.min(scored.length, 4);
+                    if (focusCycleIndexRef.current.type === selectedComponentKey) {
+                        focusCycleIndexRef.current.index = (focusCycleIndexRef.current.index + 1) % poolSize;
+                    } else {
+                        focusCycleIndexRef.current = { type: selectedComponentKey, index: 0 };
+                    }
+                    targetObj = scored[focusCycleIndexRef.current.index].obj;
+                }
+            }
+        }
+
+        if (!targetObj) return;
+
+        // Compute world-space bounding box centroid of the target molecular component
+        const box = new THREE.Box3().setFromObject(targetObj);
+        const worldCenter = new THREE.Vector3();
+        if (!box.isEmpty()) {
+            box.getCenter(worldCenter);
+        } else {
+            targetObj.getWorldPosition(worldCenter);
+        }
+
+        const localCenter = targetObj.worldToLocal(worldCenter.clone());
+        focusedTargetRef.current = {
+            object: targetObj,
+            localCenter,
+            type: selectedComponentKey
+        };
+
+        // Smoothly pan camera focal point to center on the component
+        const lim = cam.panLimit;
+        cam.panTarget.set(
+            THREE.MathUtils.clamp(worldCenter.x, -lim, lim),
+            THREE.MathUtils.clamp(worldCenter.y, -lim, lim),
+            THREE.MathUtils.clamp(worldCenter.z, -lim, lim)
+        );
+
+        // Compute outward radial vector from the DNA central axis at the component's height
+        const localInDna = dnaGroup.worldToLocal(worldCenter.clone());
+        const axisWorld = dnaGroup.localToWorld(new THREE.Vector3(0, localInDna.y, 0));
+        const radialVec = new THREE.Vector3().subVectors(worldCenter, axisWorld);
+        const radialDistXZ = Math.hypot(radialVec.x, radialVec.z);
+
+        let targetTheta = cam.sphericalCurrent.theta;
+        if (radialDistXZ > 0.35) {
+            // Orient camera to face the component from the exterior with a 14° 3/4 stereo perspective
+            targetTheta = Math.atan2(radialVec.x, radialVec.z) + 0.24;
+        }
+
+        // Normalize current theta to take the shortest angular path to targetTheta
+        const twoPi = Math.PI * 2;
+        const diffTheta = ((targetTheta - cam.sphericalCurrent.theta + Math.PI) % twoPi + twoPi) % twoPi - Math.PI;
+        cam.sphericalCurrent.theta = targetTheta - diffTheta;
+        cam.sphericalTarget.theta = targetTheta;
+
+        // Set comfortable viewing elevation angle
+        cam.sphericalTarget.phi = THREE.MathUtils.clamp(
+            Math.PI * 0.44,
+            cam.minPolarAngle,
+            cam.maxPolarAngle
+        );
+
+        // Set optimal macro inspection distance tailored to the component scale
+        const macroRadiusByType: Record<string, number> = {
+            A: 20.5,
+            T: 20.5,
+            G: 20.5,
+            C: 20.5,
+            backbone: 22.0,
+            hbond: 18.0,
+            methylation: 17.5,
+            thymine_dimer: 18.5,
+            intercalator: 19.5,
+            ion_mg: 18.5,
+            water_hydration: 18.0
+        };
+        const desiredRadius = macroRadiusByType[selectedComponentKey] || 20.5;
+        cam.sphericalTarget.radius = THREE.MathUtils.clamp(
+            desiredRadius,
+            cam.minDistance,
+            cam.maxDistance
+        );
+
+        // Trigger visual discovery pulse when selected via InspectorPanel
+        if (!wasDirect3dClick) {
+            bloomPulseBoostRef.current = 0.22;
+            const pulseTarget = (targetObj.userData && targetObj.userData.parentGroup) ? targetObj.userData.parentGroup : targetObj;
+            const origScale = pulseTarget.scale.clone();
+            animateVector(pulseTarget.scale, origScale.clone().multiplyScalar(1.24), 220, easeOutBack);
+            setTimeout(() => animateVector(pulseTarget.scale, origScale, 320, easeInOutCubic), 240);
+        }
+    }, [selectedComponentKey, focusComponentTrigger, conformation, condition, sequence]);
+
     // Handle Render Mode switches
     const applyRenderMode = (mode: RenderModeType) => {
         const isBio = (mode === 'bio');
@@ -2998,8 +3335,10 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 const clicked = intersects[0].object;
                 const type = clicked.userData.type;
                 if (type) {
-                    onSelectComponent(type);
                     const tg = clicked.userData.parentGroup || clicked;
+                    last3dClickedRef.current = { type, object: tg, time: performance.now() };
+                    onSelectComponent(type);
+                    bloomPulseBoostRef.current = 0.20;
                     const origScale = tg.scale.clone();
                     animateVector(tg.scale, origScale.clone().multiplyScalar(1.25), 200, easeOutBack);
                     setTimeout(() => animateVector(tg.scale, origScale, 300, easeInOutCubic), 220);

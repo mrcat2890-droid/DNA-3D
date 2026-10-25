@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
     ConformationType,
     RenderModeType,
@@ -8,7 +8,8 @@ import {
     CameraControlMode,
     CameraStepAction,
     CameraStepCommand,
-    WebXrSupportStatus
+    WebXrSupportStatus,
+    VrHeadsetTelemetry
 } from './types/dna';
 import { DNA_DATA, calculateSequenceStats } from './data/dnaData';
 import { DnaCanvas } from './components/DnaCanvas';
@@ -32,30 +33,110 @@ export const App: React.FC = () => {
     const [showIons, setShowIons] = useState<boolean>(false);
     const [metricScaleVisible, setMetricScaleVisible] = useState<boolean>(false);
     const [labelsVisible, setLabelsVisible] = useState<boolean>(true);
+    const [bloomEnabled, setBloomEnabled] = useState<boolean>(true);
+    const [bloomStrength, setBloomStrength] = useState<number>(0.36);
+    const [bloomThreshold, setBloomThreshold] = useState<number>(0.82);
     const [cameraControlMode, setCameraControlMode] = useState<CameraControlMode>('rotate');
     const [cameraStepCommand, setCameraStepCommand] = useState<CameraStepCommand | null>(null);
 
     const [isVrModeActive, setIsVrModeActive] = useState<boolean>(false);
     const [isStereoLensMode, setIsStereoLensMode] = useState<boolean>(false);
     const [webXrStatus, setWebXrStatus] = useState<WebXrSupportStatus>('checking');
+    const [vrTelemetry, setVrTelemetry] = useState<VrHeadsetTelemetry>({
+        latencyMs: 11.2,
+        fps: 72,
+        batteryPercent: 94,
+        isCharging: false
+    });
 
     const [selectedComponentKey, setSelectedComponentKey] = useState<string | null>(null);
+    const [focusComponentTrigger, setFocusComponentTrigger] = useState<number>(0);
     const [isControlsOpen, setIsControlsOpen] = useState<boolean>(false);
     const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(false);
+    const [isDesktopControlsCollapsed, setIsDesktopControlsCollapsed] = useState<boolean>(false);
+    const [isDesktopInspectorCollapsed, setIsDesktopInspectorCollapsed] = useState<boolean>(false);
     const [isTutorialOpen, setIsTutorialOpen] = useState<boolean>(false);
     const [resetCameraTrigger, setResetCameraTrigger] = useState<number>(0);
 
     const [annotationPositions, setAnnotationPositions] = useState<Record<string, { x: number; y: number; visible: boolean }>>({});
 
+    // Monitor XR Headset / Device Battery Level via Web Battery Status API
+    useEffect(() => {
+        let batteryMgr: any = null;
+        let isMounted = true;
+
+        const syncBattery = () => {
+            if (!isMounted || !batteryMgr) return;
+            const rawPct = Math.round((batteryMgr.level ?? 0.94) * 100);
+            const clampedPct = Math.max(1, Math.min(100, rawPct));
+            setVrTelemetry(prev => ({
+                ...prev,
+                batteryPercent: clampedPct,
+                isCharging: Boolean(batteryMgr.charging)
+            }));
+        };
+
+        const nav = navigator as any;
+        if (nav && typeof nav.getBattery === 'function') {
+            nav.getBattery()
+                .then((mgr: any) => {
+                    if (!isMounted) return;
+                    batteryMgr = mgr;
+                    syncBattery();
+                    batteryMgr.addEventListener('levelchange', syncBattery);
+                    batteryMgr.addEventListener('chargingchange', syncBattery);
+                })
+                .catch(() => {
+                    // Fallback to default nominal headset battery telemetry
+                });
+        }
+
+        return () => {
+            isMounted = false;
+            if (batteryMgr) {
+                batteryMgr.removeEventListener('levelchange', syncBattery);
+                batteryMgr.removeEventListener('chargingchange', syncBattery);
+            }
+        };
+    }, []);
+
+    const handleUpdateVrPerformance = useCallback((metrics: { latencyMs: number; fps: number }) => {
+        setVrTelemetry(prev => {
+            if (prev.latencyMs === metrics.latencyMs && prev.fps === metrics.fps) return prev;
+            return {
+                ...prev,
+                latencyMs: metrics.latencyMs,
+                fps: metrics.fps
+            };
+        });
+    }, []);
+
     const sequenceStats = useMemo(() => {
         return calculateSequenceStats(sequence).stats;
     }, [sequence]);
 
-    const handleSelectComponent = (type: string) => {
+    const handleSelectComponent = (type: string | null) => {
         setSelectedComponentKey(type);
-        if (window.innerWidth <= 768) {
-            setIsControlsOpen(false);
-            setIsInspectorOpen(true);
+        if (type) {
+            setFocusComponentTrigger(prev => prev + 1);
+            // Ensure condition-specific or solvation components exist in the 3D scene when selected via InspectorPanel
+            if (type === 'methylation' && condition !== 'methylation') {
+                setCondition('methylation');
+            } else if (type === 'thymine_dimer' && condition !== 'thymine_dimer') {
+                setCondition('thymine_dimer');
+            } else if (type === 'intercalator' && condition !== 'intercalation') {
+                setCondition('intercalation');
+            } else if ((type === 'ion_mg' || type === 'water_hydration') && !showIons) {
+                setShowIons(true);
+            }
+            if (filterComponent !== 'all' && filterComponent !== type) {
+                setFilterComponent('all');
+            }
+            setIsDesktopInspectorCollapsed(false);
+            if (window.innerWidth <= 768) {
+                setIsControlsOpen(false);
+                setIsInspectorOpen(true);
+            }
         }
     };
 
@@ -64,21 +145,45 @@ export const App: React.FC = () => {
         setIsInspectorOpen(false);
     };
 
-    const handleToggleControls = () => {
-        if (isControlsOpen) {
+    const handleCloseControlsPanel = () => {
+        if (window.innerWidth <= 768) {
             setIsControlsOpen(false);
         } else {
+            setIsDesktopControlsCollapsed(true);
+        }
+    };
+
+    const handleCloseInspectorPanel = () => {
+        if (window.innerWidth <= 768) {
             setIsInspectorOpen(false);
-            setIsControlsOpen(true);
+        } else {
+            setIsDesktopInspectorCollapsed(true);
+        }
+    };
+
+    const handleToggleControls = () => {
+        if (window.innerWidth <= 768) {
+            if (isControlsOpen) {
+                setIsControlsOpen(false);
+            } else {
+                setIsInspectorOpen(false);
+                setIsControlsOpen(true);
+            }
+        } else {
+            setIsDesktopControlsCollapsed(prev => !prev);
         }
     };
 
     const handleToggleInspector = () => {
-        if (isInspectorOpen) {
-            setIsInspectorOpen(false);
+        if (window.innerWidth <= 768) {
+            if (isInspectorOpen) {
+                setIsInspectorOpen(false);
+            } else {
+                setIsControlsOpen(false);
+                setIsInspectorOpen(true);
+            }
         } else {
-            setIsControlsOpen(false);
-            setIsInspectorOpen(true);
+            setIsDesktopInspectorCollapsed(prev => !prev);
         }
     };
 
@@ -105,25 +210,24 @@ export const App: React.FC = () => {
 
     const selectedComponentData = selectedComponentKey ? DNA_DATA[selectedComponentKey] || null : null;
 
+    const latencyState: 'optimal' | 'nominal' | 'high' =
+        vrTelemetry.latencyMs <= 16.5 ? 'optimal' : vrTelemetry.latencyMs <= 26.0 ? 'nominal' : 'high';
+    const latencyLabel =
+        latencyState === 'optimal' ? 'OPTIMAL' : latencyState === 'nominal' ? 'STABIL' : 'TINGGI';
+
+    const batteryState: 'optimal' | 'low' | 'critical' =
+        vrTelemetry.batteryPercent > 25 ? 'optimal' : vrTelemetry.batteryPercent > 12 ? 'low' : 'critical';
+    const batteryFillWidth = Math.max(2, Math.round((vrTelemetry.batteryPercent / 100) * 12));
+
     return (
         <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
-            {/* Ambient Animated Molecular Background Layer */}
-            <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', zIndex: 0, pointerEvents: 'none' }}>
-                <div style={{ position: 'absolute', top: '-10%', left: '-10%', width: '50vw', height: '50vw', background: 'radial-gradient(circle, rgba(0, 240, 255, 0.12) 0%, transparent 70%)', filter: 'blur(60px)' }}></div>
-                <div style={{ position: 'absolute', bottom: '-15%', right: '-10%', width: '55vw', height: '55vw', background: 'radial-gradient(circle, rgba(29, 99, 255, 0.15) 0%, transparent 70%)', filter: 'blur(70px)' }}></div>
-
-                <div className="ambient-nucleotide" style={{ left: '8%', color: '#1d63ff', fontSize: '2rem', opacity: 0.25, animationDuration: '22s', animationDelay: '0s' }}>A</div>
-                <div className="ambient-nucleotide" style={{ left: '14%', color: '#ffb703', fontSize: '1.8rem', opacity: 0.25, animationDuration: '24s', animationDelay: '3s' }}>T</div>
-                <div className="ambient-nucleotide" style={{ left: '82%', color: '#00d659', fontSize: '2.2rem', opacity: 0.25, animationDuration: '26s', animationDelay: '6s' }}>G</div>
-                <div className="ambient-nucleotide" style={{ left: '88%', color: '#ff2a4b', fontSize: '1.9rem', opacity: 0.25, animationDuration: '23s', animationDelay: '9s' }}>C</div>
-
-                <div className="ambient-hbond-spark" style={{ top: '25%', left: '20%', width: '4px', height: '4px', background: '#00f0ff', boxShadow: '0 0 10px #00f0ff', animationDuration: '4s' }}></div>
-                <div className="ambient-hbond-spark" style={{ top: '60%', left: '15%', width: '3px', height: '3px', background: '#38bdf8', boxShadow: '0 0 8px #38bdf8', animationDuration: '5s', animationDelay: '1.5s' }}></div>
-                <div className="ambient-hbond-spark" style={{ top: '35%', right: '18%', width: '5px', height: '5px', background: '#00ff66', boxShadow: '0 0 12px #00ff66', animationDuration: '4.5s', animationDelay: '2.5s' }}></div>
-                <div className="ambient-hbond-spark" style={{ top: '70%', right: '22%', width: '4px', height: '4px', background: '#ffb703', boxShadow: '0 0 10px #ffb703', animationDuration: '3.8s', animationDelay: '0.8s' }}></div>
+            {/* Subtle Ambient Depth Layer */}
+            <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', zIndex: 2, pointerEvents: 'none' }}>
+                <div style={{ position: 'absolute', top: '-12%', left: '-10%', width: '48vw', height: '48vw', background: 'radial-gradient(circle, rgba(56, 189, 248, 0.05) 0%, transparent 70%)', filter: 'blur(64px)' }}></div>
+                <div style={{ position: 'absolute', bottom: '-15%', right: '-10%', width: '52vw', height: '52vw', background: 'radial-gradient(circle, rgba(29, 99, 255, 0.06) 0%, transparent 70%)', filter: 'blur(72px)' }}></div>
             </div>
 
-            {/* Three.js 3D Canvas with WebXR & Stereoscopic 360° VR Support */}
+            {/* Three.js 3D Canvas with Post-Processing UnrealBloomPass, WebXR & Stereoscopic 360° VR Support */}
             <DnaCanvas
                 conformation={conformation}
                 renderMode={renderMode}
@@ -136,18 +240,24 @@ export const App: React.FC = () => {
                 showIons={showIons}
                 metricScaleVisible={metricScaleVisible}
                 labelsVisible={labelsVisible}
+                bloomEnabled={bloomEnabled}
+                bloomStrength={bloomStrength}
+                bloomThreshold={bloomThreshold}
                 cameraControlMode={cameraControlMode}
                 cameraStepCommand={cameraStepCommand}
                 isVrModeActive={isVrModeActive}
                 isStereoLensMode={isStereoLensMode}
                 onVrModeChange={setIsVrModeActive}
                 onWebXrSupportDetected={setWebXrStatus}
+                onUpdateVrPerformance={handleUpdateVrPerformance}
+                selectedComponentKey={selectedComponentKey}
+                focusComponentTrigger={focusComponentTrigger}
                 onSelectComponent={handleSelectComponent}
                 onUpdateAnnotationPositions={setAnnotationPositions}
                 resetCameraTrigger={resetCameraTrigger}
             />
 
-            {/* Stereoscopic Lens Divider & Floating WebXR 360° HUD when VR Mode is Active */}
+            {/* Stereoscopic Lens Divider & Floating WebXR 360° HUD with Headset Battery & Latency Telemetry */}
             {isVrModeActive && (
                 <div
                     id="vr-hud-overlay"
@@ -165,78 +275,80 @@ export const App: React.FC = () => {
                                 top: 0,
                                 bottom: 0,
                                 left: '50%',
-                                width: '2px',
+                                width: '1px',
                                 transform: 'translateX(-50%)',
-                                background: 'linear-gradient(to bottom, transparent, rgba(56, 189, 248, 0.7), transparent)',
-                                boxShadow: '0 0 12px rgba(56, 189, 248, 0.6)'
+                                background: 'linear-gradient(to bottom, transparent, rgba(56, 189, 248, 0.65), transparent)'
                             }}
                         />
                     )}
-                    <div
-                        style={{
-                            position: 'absolute',
-                            top: '86px',
-                            left: '50%',
-                            transform: 'translateX(-50%)',
-                            pointerEvents: 'auto',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '10px',
-                            background: 'rgba(4, 13, 33, 0.88)',
-                            border: '1px solid rgba(56, 189, 248, 0.48)',
-                            borderRadius: '999px',
-                            padding: '6px 16px',
-                            backdropFilter: 'blur(14px)',
-                            boxShadow: '0 4px 24px rgba(0, 0, 0, 0.5), 0 0 20px rgba(56, 189, 248, 0.25)',
-                            color: '#e2e8f0',
-                            fontSize: '0.76rem'
-                        }}
-                    >
-                        <span style={{ color: '#38bdf8', fontWeight: 700, fontFamily: 'Orbitron, sans-serif', letterSpacing: '0.8px' }}>
-                            🥽 WEBXR 360° VR AKTIF
-                        </span>
-                        <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+                    <div className="vr-hud-bar" role="status" aria-label="Status Performa & Baterai Headset WebXR">
+                        <span className="vr-hud-status">WEBXR 360° IMERSIF</span>
+                        <span className="vr-hud-sep" aria-hidden="true">·</span>
+
+                        {/* XR Headset Battery Level Indicator */}
+                        <div
+                            id="vr-hud-battery"
+                            className={`vr-hud-telemetry vr-telemetry-${batteryState}`}
+                            title={`Daya Baterai Perangkat XR: ${vrTelemetry.batteryPercent}%${vrTelemetry.isCharging ? ' (Mengisi Daya)' : ''}`}
+                        >
+                            <svg width="18" height="12" viewBox="0 0 22 14" fill="none" aria-hidden="true" className="vr-hud-icon">
+                                <rect x="1" y="2" width="16" height="10" rx="2" stroke="currentColor" strokeWidth="1.6" />
+                                <path d="M19 5V9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                                <rect x="3" y="4" width={batteryFillWidth} height="6" rx="1" fill="currentColor" />
+                            </svg>
+                            <span className="vr-hud-metric-label">{vrTelemetry.isCharging ? 'CHG' : 'BAT'}</span>
+                            <span className="vr-hud-metric-val">{vrTelemetry.batteryPercent}%</span>
+                        </div>
+
+                        <span className="vr-hud-sep" aria-hidden="true">·</span>
+
+                        {/* XR Headset Motion-to-Photon Latency & Refresh Rate Indicator */}
+                        <div
+                            id="vr-hud-latency"
+                            className={`vr-hud-telemetry vr-telemetry-${latencyState}`}
+                            title={`Latensi Pipeline Render XR: ${vrTelemetry.latencyMs.toFixed(1)} ms (${vrTelemetry.fps} FPS) — Status: ${latencyLabel}`}
+                        >
+                            <svg width="14" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="vr-hud-icon">
+                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                            </svg>
+                            <span className="vr-hud-metric-label">LATENSI</span>
+                            <span className="vr-hud-metric-val">{vrTelemetry.latencyMs.toFixed(1)} ms</span>
+                            <span className="vr-hud-metric-sub">
+                                {vrTelemetry.fps} FPS · {latencyLabel}
+                            </span>
+                        </div>
+
+                        <span className="vr-hud-sep" aria-hidden="true">·</span>
+
                         <button
                             type="button"
+                            className={`vr-hud-btn ${isStereoLensMode ? 'active' : ''}`}
                             onClick={handleToggleStereoLensMode}
-                            style={{
-                                background: isStereoLensMode ? 'rgba(56, 189, 248, 0.28)' : 'rgba(15, 23, 42, 0.8)',
-                                border: '1px solid rgba(56, 189, 248, 0.45)',
-                                color: '#fff',
-                                borderRadius: '999px',
-                                padding: '3px 11px',
-                                fontSize: '0.72rem',
-                                fontWeight: 600,
-                                cursor: 'pointer'
-                            }}
                             title="Ganti antara Lensa Stereoskopik Headset (Side-by-Side) dan Panorama 360°"
                         >
-                            {isStereoLensMode ? '👓 Lensa Stereo (SBS)' : '🌐 Kubah 360°'}
+                            {isStereoLensMode ? 'Lensa Stereo (SBS)' : 'Panorama 360°'}
                         </button>
                         <button
                             type="button"
+                            className="vr-hud-btn vr-hud-exit"
                             onClick={() => setIsVrModeActive(false)}
-                            style={{
-                                background: 'rgba(239, 68, 68, 0.22)',
-                                border: '1px solid rgba(239, 68, 68, 0.55)',
-                                color: '#fca5a5',
-                                borderRadius: '999px',
-                                padding: '3px 11px',
-                                fontSize: '0.72rem',
-                                fontWeight: 600,
-                                cursor: 'pointer'
-                            }}
                             title="Keluar dari Mode Virtual Reality"
                         >
-                            ✕ Keluar VR
+                            Keluar VR
                         </button>
                     </div>
                 </div>
             )}
 
-            {/* Header Overlay */}
+            {/* Header Instrument Bar */}
             <Header
+                conformation={conformation}
+                renderMode={renderMode}
+                sequenceLength={sequenceStats.length}
+                tmValue={sequenceStats.tm}
                 isVrModeActive={isVrModeActive}
+                isControlsVisible={!isDesktopControlsCollapsed}
+                isInspectorVisible={!isDesktopInspectorCollapsed}
                 onToggleVrMode={handleToggleVrMode}
                 onOpenTutorial={() => setIsTutorialOpen(true)}
                 onToggleControls={handleToggleControls}
@@ -253,7 +365,8 @@ export const App: React.FC = () => {
             {/* Controls Panel */}
             <ControlsPanel
                 isOpen={isControlsOpen}
-                onClose={handleCloseDrawers}
+                isDesktopCollapsed={isDesktopControlsCollapsed}
+                onClose={handleCloseControlsPanel}
                 conformation={conformation}
                 onSelectConformation={setConformation}
                 renderMode={renderMode}
@@ -269,6 +382,12 @@ export const App: React.FC = () => {
                 onToggleIons={() => setShowIons(prev => !prev)}
                 metricScaleVisible={metricScaleVisible}
                 onToggleMetrics={() => setMetricScaleVisible(prev => !prev)}
+                bloomEnabled={bloomEnabled}
+                bloomStrength={bloomStrength}
+                bloomThreshold={bloomThreshold}
+                onToggleBloom={() => setBloomEnabled(prev => !prev)}
+                onChangeBloomStrength={setBloomStrength}
+                onChangeBloomThreshold={setBloomThreshold}
                 assemblyMode={assemblyMode}
                 onUnzip={() => setAssemblyMode('unzipped')}
                 onExplode={() => setAssemblyMode('exploded')}
@@ -293,8 +412,12 @@ export const App: React.FC = () => {
             {/* Inspector Panel */}
             <InspectorPanel
                 isOpen={isInspectorOpen}
-                onClose={handleCloseDrawers}
+                isDesktopCollapsed={isDesktopInspectorCollapsed}
+                conformation={conformation}
+                onClose={handleCloseInspectorPanel}
                 selectedComponent={selectedComponentData}
+                selectedComponentKey={selectedComponentKey}
+                onSelectComponentKey={handleSelectComponent}
             />
 
             {/* 3D Annotations Overlay */}
@@ -330,5 +453,3 @@ export const App: React.FC = () => {
         </div>
     );
 };
-
-

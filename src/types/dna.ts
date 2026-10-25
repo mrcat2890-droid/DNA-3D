@@ -23,6 +23,14 @@ export interface CameraStepCommand {
 }
 
 export type WebXrSupportStatus = 'checking' | 'supported' | 'fallback_360';
+export type BloomPresetType = 'subtle' | 'cinematic' | 'extreme' | 'custom';
+
+export interface VrHeadsetTelemetry {
+    latencyMs: number;
+    fps: number;
+    batteryPercent: number;
+    isCharging: boolean;
+}
 
 
 export interface ComponentDetails {
