@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="./assets/banner.svg" alt="DNA 3D Helix Banner" width="100%" style="border-radius: 14px; max-width: 960px;" />
+</div>
+
 # Model DNA 3D Ultra-Realistis (GEN-OS 3D BIO-CORE)
 
 Aplikasi eksplorasi interaktif molekuler heliks ganda DNA 360° berstandar riset yang dibangun dengan **React + TypeScript + Vite + Three.js**. Berdasarkan data kristalografi sinar-X PDB ID: 1BNA (Dickerson et al., 1982) serta model struktur Watson-Crick (1953) & Rosalind Franklin.
