@@ -4,6 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import {
     ConformationType,
@@ -13,9 +14,15 @@ import {
     FilterComponentType,
     CameraControlMode,
     CameraStepCommand,
-    WebXrSupportStatus
+    WebXrSupportStatus,
+    VrPointerTelemetry,
+    VrLocomotionMode,
+    VrGameTelemetry,
+    XrRuntimeProfile,
+    XrHandGestureState
 } from '../types/dna';
-import { CONFORMATIONS, calculateSequenceStats } from '../data/dnaData';
+import { CONFORMATIONS, DNA_DATA, calculateSequenceStats } from '../data/dnaData';
+import { vrSound, triggerUniversalXrHaptics } from '../utils/vrAudio';
 
 interface DnaCanvasProps {
     conformation: ConformationType;
@@ -32,13 +39,24 @@ interface DnaCanvasProps {
     bloomEnabled?: boolean;
     bloomStrength?: number;
     bloomThreshold?: number;
+    dofEnabled?: boolean;
+    dofAperture?: number;
+    envReflectionIntensity?: number;
+    snapshotTrigger?: number;
+    onSnapshotCaptured?: (dataUrl: string) => void;
     cameraControlMode: CameraControlMode;
     cameraStepCommand: CameraStepCommand | null;
     isVrModeActive: boolean;
     isStereoLensMode: boolean;
+    vrLocomotionMode?: VrLocomotionMode;
+    isVrGameActive?: boolean;
+    isVrAudioMuted?: boolean;
     onVrModeChange: (active: boolean) => void;
+    onToggleVrGame?: () => void;
     onWebXrSupportDetected: (status: WebXrSupportStatus) => void;
     onUpdateVrPerformance?: (metrics: { latencyMs: number; fps: number }) => void;
+    onUpdateVrPointer?: (pointer: VrPointerTelemetry) => void;
+    onUpdateVrGameTelemetry?: (telemetry: VrGameTelemetry) => void;
     selectedComponentKey?: string | null;
     focusComponentTrigger?: number;
     onSelectComponent: (type: string) => void;
@@ -93,13 +111,24 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
     bloomEnabled = true,
     bloomStrength = 0.36,
     bloomThreshold = 0.82,
+    dofEnabled = true,
+    dofAperture = 0.00018,
+    envReflectionIntensity = 1.35,
+    snapshotTrigger = 0,
+    onSnapshotCaptured,
     cameraControlMode,
     cameraStepCommand,
     isVrModeActive,
     isStereoLensMode,
+    vrLocomotionMode = 'snap',
+    isVrGameActive = false,
+    isVrAudioMuted = false,
     onVrModeChange,
+    onToggleVrGame,
     onWebXrSupportDetected,
     onUpdateVrPerformance,
+    onUpdateVrPointer,
+    onUpdateVrGameTelemetry,
     selectedComponentKey = null,
     focusComponentTrigger = 0,
     onSelectComponent,
@@ -115,13 +144,33 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const composerRef = useRef<EffectComposer | null>(null);
     const bloomPassRef = useRef<UnrealBloomPass | null>(null);
+    const bokehPassRef = useRef<BokehPass | null>(null);
     const bloomPulseBoostRef = useRef<number>(0);
     const customCamRef = useRef<CustomCameraController | null>(null);
     const dnaGroupRef = useRef<THREE.Group | null>(null);
     const ionGroupRef = useRef<THREE.Group | null>(null);
     const vrEnvGroupRef = useRef<THREE.Group | null>(null);
+    const vrRigGroupRef = useRef<THREE.Group | null>(null);
+    const vrGameBeaconRef = useRef<THREE.Group | null>(null);
+    const vrFloatingCardUpdaterRef = useRef<((compKey: string | null, hoveredKey: string | null, dwellPct: number) => void) | null>(null);
+    const vrComponentSelectTriggerRef = useRef<((hitObj: THREE.Object3D) => void) | null>(null);
     const xrSessionRef = useRef<any>(null);
     const webXrNativeSupportedRef = useRef<boolean>(false);
+    const webXrSupportedModeRef = useRef<'immersive-vr' | 'immersive-ar'>('immersive-vr');
+
+    // Interactive VR Game State (Misi Perbaikan Heliks CRISPR)
+    const vrGameStateRef = useRef<VrGameTelemetry>({
+        active: false,
+        score: 0,
+        combo: 1,
+        repairedCount: 0,
+        timeRemainingSec: 60,
+        targetPairIndex: 10,
+        targetBaseType: 'A',
+        complementBaseType: 'T',
+        lesionLabel: 'Mismatch Watson-Crick',
+        lastEventLabel: null
+    });
 
     // Store collections
     const allInteractiveMeshesRef = useRef<THREE.Mesh[]>([]);
@@ -186,12 +235,20 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         bloomEnabled,
         bloomStrength,
         bloomThreshold,
+        dofEnabled,
+        dofAperture,
+        envReflectionIntensity,
+        selectedComponentKey,
         cameraControlMode,
         isVrModeActive,
-        isStereoLensMode
+        isStereoLensMode,
+        vrLocomotionMode,
+        isVrGameActive,
+        isVrAudioMuted
     });
 
     useEffect(() => {
+        vrSound.setMuted(isVrAudioMuted);
         stateRef.current = {
             conformation,
             renderMode,
@@ -207,16 +264,47 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             bloomEnabled,
             bloomStrength,
             bloomThreshold,
+            dofEnabled,
+            dofAperture,
+            envReflectionIntensity,
+            selectedComponentKey,
             cameraControlMode,
             isVrModeActive,
-            isStereoLensMode
+            isStereoLensMode,
+            vrLocomotionMode,
+            isVrGameActive,
+            isVrAudioMuted
         };
         if (bloomPassRef.current) {
             bloomPassRef.current.enabled = bloomEnabled;
             bloomPassRef.current.strength = bloomStrength + bloomPulseBoostRef.current;
             bloomPassRef.current.threshold = bloomThreshold;
         }
-    }, [conformation, renderMode, condition, assemblyMode, sequence, activeFilter, autoRotate, thermalDynamics, showIons, metricScaleVisible, labelsVisible, bloomEnabled, bloomStrength, bloomThreshold, cameraControlMode, isVrModeActive, isStereoLensMode]);
+        if (bokehPassRef.current) {
+            bokehPassRef.current.enabled = dofEnabled;
+        }
+        // Synchronize RoomEnvironment PBR reflection intensity across scene & materials
+        if (sceneRef.current) {
+            (sceneRef.current as any).environmentIntensity = envReflectionIntensity;
+        }
+        const updateMatEnvIntensity = (groupObj: any) => {
+            if (!groupObj) return;
+            Object.values(groupObj).forEach((val: any) => {
+                if (val && val.isMaterial && typeof val.envMapIntensity === 'number') {
+                    val.envMapIntensity = envReflectionIntensity;
+                } else if (val && typeof val === 'object') {
+                    updateMatEnvIntensity(val);
+                }
+            });
+        };
+        updateMatEnvIntensity(materialsRef.current);
+        updateMatEnvIntensity(conditionMaterialsRef.current);
+        updateMatEnvIntensity(electroMaterialsRef.current);
+        updateMatEnvIntensity(badgeMaterialsRef.current);
+        if (vrFloatingCardUpdaterRef.current) {
+            vrFloatingCardUpdaterRef.current(selectedComponentKey, null, 0);
+        }
+    }, [conformation, renderMode, condition, assemblyMode, sequence, activeFilter, autoRotate, thermalDynamics, showIons, metricScaleVisible, labelsVisible, bloomEnabled, bloomStrength, bloomThreshold, dofEnabled, dofAperture, envReflectionIntensity, selectedComponentKey, cameraControlMode, isVrModeActive, isStereoLensMode, vrLocomotionMode, isVrGameActive, isVrAudioMuted]);
 
     // Setup Three.js Scene
     useEffect(() => {
@@ -252,7 +340,12 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         bgTexture.colorSpace = THREE.SRGBColorSpace;
         scene.background = bgTexture;
 
-        const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const DESKTOP_NEAR_PLANE = 0.1;
+        const DESKTOP_FAR_PLANE = 1000.0;
+        const XR_NEAR_PLANE = 0.025; // 2.5 cm near clip plane prevents molecular clipping during close-up VR inspection
+        const XR_FAR_PLANE = 160.0;  // Tightened far plane increases 24-bit hardware depth buffer precision by >4x in VR
+
+        const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, DESKTOP_NEAR_PLANE, DESKTOP_FAR_PLANE);
         cameraRef.current = camera;
 
         const stereoCamera = new THREE.StereoCamera();
@@ -262,6 +355,8 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const renderer = new THREE.WebGLRenderer({
             antialias: !isSoftwareGl,
             alpha: false,
+            depth: true,
+            stencil: false,
             powerPreference: 'high-performance'
         });
         renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
@@ -269,20 +364,74 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 0.96;
         renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.sortObjects = true; // Enforce deterministic front-to-back opaque & back-to-front transparent depth sorting
 
-        // Enable WebXR Immersive VR Support
+        // Enable Universal WebXR Immersive VR / AR Support with Reference-Space Fallback Chain
         renderer.xr.enabled = true;
-        try {
-            renderer.xr.setReferenceSpaceType('local-floor');
-        } catch {
-            renderer.xr.setReferenceSpaceType('local');
+        const refSpaces: Array<'local-floor' | 'bounded-floor' | 'local' | 'viewer'> = [
+            'local-floor',
+            'bounded-floor',
+            'local',
+            'viewer'
+        ];
+        for (const space of refSpaces) {
+            try {
+                renderer.xr.setReferenceSpaceType(space);
+                break;
+            } catch {
+                // Continue to next reference space fallback
+            }
         }
+
+        // Synchronize WebXR session depthNear/depthFar & stereo ArrayCamera projection planes across VR hardware
+        const synchronizeXrDepthAndCameraPlanes = (isXrActive: boolean, session?: any) => {
+            const targetNear = isXrActive ? XR_NEAR_PLANE : DESKTOP_NEAR_PLANE;
+            const targetFar = isXrActive ? XR_FAR_PLANE : DESKTOP_FAR_PLANE;
+
+            if (camera.near !== targetNear || camera.far !== targetFar) {
+                camera.near = targetNear;
+                camera.far = targetFar;
+                camera.updateProjectionMatrix();
+            }
+
+            if (isXrActive && session && typeof session.updateRenderState === 'function') {
+                try {
+                    session.updateRenderState({
+                        depthNear: XR_NEAR_PLANE,
+                        depthFar: XR_FAR_PLANE
+                    });
+                } catch {
+                    // Ignore on XR runtimes that lock renderState during active frame
+                }
+            }
+
+            if (isXrActive && renderer.xr.isPresenting) {
+                try {
+                    const xrCam = renderer.xr.getCamera() as any;
+                    if (xrCam) {
+                        xrCam.near = XR_NEAR_PLANE;
+                        xrCam.far = XR_FAR_PLANE;
+                        if (Array.isArray(xrCam.cameras)) {
+                            for (let c = 0; c < xrCam.cameras.length; c++) {
+                                const subCam = xrCam.cameras[c];
+                                if (subCam && (subCam.near !== XR_NEAR_PLANE || subCam.far !== XR_FAR_PLANE)) {
+                                    subCam.near = XR_NEAR_PLANE;
+                                    subCam.far = XR_FAR_PLANE;
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    // Ignore camera array inspection errors
+                }
+            }
+        };
 
         container.appendChild(renderer.domElement);
         rendererRef.current = renderer;
 
         // =====================================================================
-        // POST-PROCESSING PIPELINE: EffectComposer + RenderPass + UnrealBloomPass + OutputPass
+        // POST-PROCESSING PIPELINE: EffectComposer + RenderPass + UnrealBloomPass + BokehPass (Macro DOF) + OutputPass
         // =====================================================================
         const composerRenderTarget = new THREE.WebGLRenderTarget(
             window.innerWidth,
@@ -306,19 +455,42 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         bloomPass.enabled = stateRef.current.bloomEnabled;
         composer.addPass(bloomPass);
 
+        const bokehPass = new BokehPass(scene, camera, {
+            focus: 48.0,
+            aperture: stateRef.current.dofAperture,
+            maxblur: 0.0022
+        });
+        bokehPass.enabled = !isSoftwareGl && stateRef.current.dofEnabled;
+        composer.addPass(bokehPass);
+
         const outputPass = new OutputPass();
         composer.addPass(outputPass);
 
         composerRef.current = composer;
         bloomPassRef.current = bloomPass;
+        bokehPassRef.current = bokehPass;
 
-        // Probe WebXR headset capability
+        // Probe Universal WebXR headset capability (immersive-vr -> immersive-ar -> 360/Gamepad fallback)
         const xrNav = (navigator as any).xr;
         if (xrNav && typeof xrNav.isSessionSupported === 'function') {
             xrNav.isSessionSupported('immersive-vr')
-                .then((supported: boolean) => {
-                    webXrNativeSupportedRef.current = !!supported;
-                    onWebXrSupportDetected(supported ? 'supported' : 'fallback_360');
+                .then(async (vrSupported: boolean) => {
+                    if (vrSupported) {
+                        webXrNativeSupportedRef.current = true;
+                        webXrSupportedModeRef.current = 'immersive-vr';
+                        onWebXrSupportDetected('supported');
+                        return;
+                    }
+                    // Fallback check for passthrough MR/AR headsets (e.g. Vision Pro / Quest Passthrough)
+                    try {
+                        const arSupported = await xrNav.isSessionSupported('immersive-ar');
+                        webXrNativeSupportedRef.current = !!arSupported;
+                        webXrSupportedModeRef.current = arSupported ? 'immersive-ar' : 'immersive-vr';
+                        onWebXrSupportDetected(arSupported ? 'supported' : 'fallback_360');
+                    } catch {
+                        webXrNativeSupportedRef.current = false;
+                        onWebXrSupportDetected('fallback_360');
+                    }
                 })
                 .catch(() => {
                     webXrNativeSupportedRef.current = false;
@@ -329,10 +501,12 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             onWebXrSupportDetected('fallback_360');
         }
 
-        // Studio PMREM Environment Map for realistic molecular reflections
+        // Studio PMREM RoomEnvironment Map for realistic microscopic molecular reflections
         const pmremGenerator = new THREE.PMREMGenerator(renderer);
-        const envTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+        pmremGenerator.compileEquirectangularShader();
+        const envTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.035).texture;
         scene.environment = envTexture;
+        (scene as any).environmentIntensity = stateRef.current.envReflectionIntensity;
         pmremGenerator.dispose();
 
         // Custom Independent Spherical Orbit & Screen-Space Pan Camera Controller
@@ -471,8 +645,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         specularPointLight.position.set(16, 18, 28);
         scene.add(specularPointLight);
 
-        // Bokeh Background
+        // Bokeh Background (anchored at earliest renderOrder so it never interferes with molecular depth sorting)
         const bokehGroup = new THREE.Group();
+        bokehGroup.renderOrder = -10;
         scene.add(bokehGroup);
         for (let i = 0; i < 28; i++) {
             const radius = 4 + Math.random() * 18;
@@ -486,6 +661,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 depthWrite: false
             });
             const mesh = new THREE.Mesh(bokehGeo, bokehMat);
+            mesh.renderOrder = -10;
             mesh.position.set(
                 (Math.random() - 0.5) * 130,
                 (Math.random() - 0.5) * 110,
@@ -513,6 +689,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             depthWrite: false
         });
         const particles = new THREE.Points(pGeo, pMat);
+        particles.renderOrder = -9;
         scene.add(particles);
 
         // Micro-Chemical Holographic Ring Label Texture Generator
@@ -1123,6 +1300,8 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 color: 0x67e8f9,
                 transparent: true,
                 opacity: 0.82,
+                depthWrite: false,
+                depthTest: true,
                 roughness: 0.14,
                 metalness: 0.20,
                 roughnessMap: pbrMaps.roughnessMap,
@@ -1195,9 +1374,11 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 normalScale: normalScaleSubtle,
                 clearcoat: 0.90,
                 envMapIntensity: 1.25,
+                depthWrite: true,
+                depthTest: true,
                 polygonOffset: true,
-                polygonOffsetFactor: -1,
-                polygonOffsetUnits: -1
+                polygonOffsetFactor: -2,
+                polygonOffsetUnits: -2
             }),
             T: new THREE.MeshPhysicalMaterial({
                 map: letterTextures.T,
@@ -1212,9 +1393,11 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 normalScale: normalScaleSubtle,
                 clearcoat: 0.90,
                 envMapIntensity: 1.25,
+                depthWrite: true,
+                depthTest: true,
                 polygonOffset: true,
-                polygonOffsetFactor: -1,
-                polygonOffsetUnits: -1
+                polygonOffsetFactor: -2,
+                polygonOffsetUnits: -2
             }),
             G: new THREE.MeshPhysicalMaterial({
                 map: letterTextures.G,
@@ -1229,9 +1412,11 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 normalScale: normalScaleSubtle,
                 clearcoat: 0.90,
                 envMapIntensity: 1.25,
+                depthWrite: true,
+                depthTest: true,
                 polygonOffset: true,
-                polygonOffsetFactor: -1,
-                polygonOffsetUnits: -1
+                polygonOffsetFactor: -2,
+                polygonOffsetUnits: -2
             }),
             C: new THREE.MeshPhysicalMaterial({
                 map: letterTextures.C,
@@ -1246,9 +1431,11 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 normalScale: normalScaleSubtle,
                 clearcoat: 0.90,
                 envMapIntensity: 1.25,
+                depthWrite: true,
+                depthTest: true,
                 polygonOffset: true,
-                polygonOffsetFactor: -1,
-                polygonOffsetUnits: -1
+                polygonOffsetFactor: -2,
+                polygonOffsetUnits: -2
             })
         };
         badgeMaterialsRef.current = badgeMaterials;
@@ -1410,7 +1597,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         scene.add(vrEnvGroup);
         vrEnvGroupRef.current = vrEnvGroup;
 
-        // 1. 360° Geodesic Cryo-EM Observatory Sky-Dome
+        // 1. 360° Geodesic Cryo-EM Observatory Sky-Dome (renderOrder -8..-5 with depthWrite: false)
         const vrDomeGeo = new THREE.IcosahedronGeometry(92, 3);
         const vrDomeShellMat = new THREE.MeshPhysicalMaterial({
             color: 0x040d21,
@@ -1422,6 +1609,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             depthWrite: false
         });
         const vrDomeShell = new THREE.Mesh(vrDomeGeo, vrDomeShellMat);
+        vrDomeShell.renderOrder = -8;
         vrEnvGroup.add(vrDomeShell);
 
         const vrDomeWireGeo = new THREE.WireframeGeometry(vrDomeGeo);
@@ -1429,22 +1617,28 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             color: 0x38bdf8,
             transparent: true,
             opacity: 0.16,
-            blending: THREE.AdditiveBlending
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
         });
         const vrDomeWire = new THREE.LineSegments(vrDomeWireGeo, vrDomeWireMat);
+        vrDomeWire.renderOrder = -7;
         vrEnvGroup.add(vrDomeWire);
 
         // 2. Holographic Polar Coordinate Floor & Zenith Calibration Grids
         const vrFloorGrid = new THREE.PolarGridHelper(68, 24, 12, 64, 0x0284c7, 0x1e3a8a);
         vrFloorGrid.position.y = -24;
+        vrFloorGrid.renderOrder = -6;
         (vrFloorGrid.material as THREE.Material).transparent = true;
         (vrFloorGrid.material as THREE.Material).opacity = 0.38;
+        (vrFloorGrid.material as THREE.Material).depthWrite = false;
         vrEnvGroup.add(vrFloorGrid);
 
         const vrCeilingGrid = new THREE.PolarGridHelper(68, 16, 8, 64, 0x38bdf8, 0x1e1b4b);
         vrCeilingGrid.position.y = 26;
+        vrCeilingGrid.renderOrder = -6;
         (vrCeilingGrid.material as THREE.Material).transparent = true;
         (vrCeilingGrid.material as THREE.Material).opacity = 0.22;
+        (vrCeilingGrid.material as THREE.Material).depthWrite = false;
         vrEnvGroup.add(vrCeilingGrid);
 
         // 3. 360° Equatorial Azimuth Horizon Rings
@@ -1459,29 +1653,386 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             depthWrite: false
         });
         const equatorialRing = new THREE.Mesh(horizonRingGeo, horizonRingMat);
+        equatorialRing.renderOrder = -5;
         vrEnvGroup.add(equatorialRing);
 
-        // 4. WebXR 6DoF Controllers with 3D Laser Pointer Raycasting
+        // 4. Universal XR Player Dolly Rig (vrRigGroup), 6DoF Controllers, 3D Cryo-Wands, Laser Raycaster & 3D CRISPR Target Beacon
+        const vrRigGroup = new THREE.Group();
+        scene.add(vrRigGroup);
+        vrRigGroupRef.current = vrRigGroup;
+
         const vrRaycaster = new THREE.Raycaster();
+        vrRaycaster.near = 0.02;
+        vrRaycaster.far = 65.0;
         const tempControllerMatrix = new THREE.Matrix4();
         const laserGeo = new THREE.BufferGeometry().setFromPoints([
             new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(0, 0, -8)
+            new THREE.Vector3(0, 0, -1)
         ]);
-        const laserMat = new THREE.LineBasicMaterial({
+        const laserMat0 = new THREE.LineBasicMaterial({
             color: 0x38bdf8,
             transparent: true,
-            opacity: 0.85,
+            opacity: 0.92,
+            blending: THREE.AdditiveBlending
+        });
+        const laserMat1 = new THREE.LineBasicMaterial({
+            color: 0x34d399,
+            transparent: true,
+            opacity: 0.92,
             blending: THREE.AdditiveBlending
         });
 
-        const handleXrSelect = (controller: THREE.Object3D) => {
-            if (!dnaGroupRef.current) return;
-            tempControllerMatrix.identity().extractRotation(controller.matrixWorld);
-            vrRaycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-            vrRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempControllerMatrix);
+        // Build Procedural Multi-Part 3D Scientific VR Controller Wand (Handle + Telemetry Ring + Emitter Tip)
+        const buildVrControllerWand = (accentHex: number) => {
+            const wandGroup = new THREE.Group();
+            const bodyGeo = new THREE.CylinderGeometry(0.016, 0.022, 0.15, 16);
+            bodyGeo.rotateX(Math.PI / 2);
+            const bodyMat = new THREE.MeshPhysicalMaterial({
+                color: 0x0f172a,
+                roughness: 0.25,
+                metalness: 0.78,
+                clearcoat: 0.9
+            });
+            const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+            bodyMesh.position.set(0, 0, 0.06);
+            wandGroup.add(bodyMesh);
 
+            const ringGeo = new THREE.TorusGeometry(0.026, 0.004, 12, 24);
+            const ringMat = new THREE.MeshBasicMaterial({
+                color: accentHex,
+                transparent: true,
+                opacity: 0.9
+            });
+            const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+            ringMesh.position.set(0, 0, -0.01);
+            wandGroup.add(ringMesh);
+
+            const tipGeo = new THREE.ConeGeometry(0.012, 0.032, 12);
+            tipGeo.rotateX(-Math.PI / 2);
+            const tipMesh = new THREE.Mesh(tipGeo, ringMat);
+            tipMesh.position.set(0, 0, -0.025);
+            wandGroup.add(tipMesh);
+
+            return wandGroup;
+        };
+
+        // Glowing 3D Hit Reticle Sphere on the DNA surface during VR Raycast / Gaze
+        const vrHitMarkerGeo = new THREE.SphereGeometry(0.22, 16, 16);
+        const vrHitMarkerMat = new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 0.92,
+            blending: THREE.AdditiveBlending,
+            depthTest: false
+        });
+        const vrHitMarker = new THREE.Mesh(vrHitMarkerGeo, vrHitMarkerMat);
+        vrHitMarker.visible = false;
+        vrHitMarker.renderOrder = 25;
+        vrEnvGroup.add(vrHitMarker);
+
+        const vrHitRingGeo = new THREE.RingGeometry(0.32, 0.44, 32);
+        const vrHitRingMat = new THREE.MeshBasicMaterial({
+            color: 0x34d399,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.85,
+            blending: THREE.AdditiveBlending,
+            depthTest: false
+        });
+        const vrHitRing = new THREE.Mesh(vrHitRingGeo, vrHitRingMat);
+        vrHitMarker.add(vrHitRing);
+
+        // 3D Holographic CRISPR Game Target Beacon (attaches to the target base pair on the DNA helix)
+        const vrGameBeaconGroup = new THREE.Group();
+        vrGameBeaconGroup.visible = false;
+        scene.add(vrGameBeaconGroup);
+        vrGameBeaconRef.current = vrGameBeaconGroup;
+
+        const beaconOuterRingGeo = new THREE.RingGeometry(1.15, 1.38, 36);
+        const beaconOuterRingMat = new THREE.MeshBasicMaterial({
+            color: 0xf43f5e,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.9,
+            blending: THREE.AdditiveBlending,
+            depthTest: false
+        });
+        const beaconOuterRing = new THREE.Mesh(beaconOuterRingGeo, beaconOuterRingMat);
+        beaconOuterRing.renderOrder = 24;
+        vrGameBeaconGroup.add(beaconOuterRing);
+
+        const beaconCrystalGeo = new THREE.OctahedronGeometry(0.52, 0);
+        const beaconCrystalMat = new THREE.MeshBasicMaterial({
+            color: 0xfbbf24,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.92,
+            blending: THREE.AdditiveBlending,
+            depthTest: false
+        });
+        const beaconCrystal = new THREE.Mesh(beaconCrystalGeo, beaconCrystalMat);
+        beaconCrystal.renderOrder = 24;
+        vrGameBeaconGroup.add(beaconCrystal);
+
+        // 5. 3D Floating Holographic Inspector & VR CRISPR Game Board in Virtual Space
+        const vrCardCanvas = document.createElement('canvas');
+        vrCardCanvas.width = 1024;
+        vrCardCanvas.height = 640;
+        const vrCardCtx = vrCardCanvas.getContext('2d')!;
+        const vrCardTexture = new THREE.CanvasTexture(vrCardCanvas);
+        vrCardTexture.colorSpace = THREE.SRGBColorSpace;
+        vrCardTexture.anisotropy = maxAniso;
+
+        const drawFloatingVrInspectorCard = (
+            compKey: string | null,
+            hoveredKey: string | null,
+            dwellPct: number
+        ) => {
+            const game = vrGameStateRef.current;
+            const activeKey = compKey || hoveredKey || (game.active ? game.targetBaseType : 'A');
+            const info = DNA_DATA[activeKey] || DNA_DATA.A;
+            const w = 1024;
+            const h = 640;
+
+            vrCardCtx.clearRect(0, 0, w, h);
+
+            // Deep Cryo-Glass Background
+            const bgGrad = vrCardCtx.createLinearGradient(0, 0, w, h);
+            bgGrad.addColorStop(0, 'rgba(7, 16, 34, 0.95)');
+            bgGrad.addColorStop(1, 'rgba(4, 10, 22, 0.97)');
+            vrCardCtx.fillStyle = bgGrad;
+            vrCardCtx.beginPath();
+            vrCardCtx.roundRect(8, 8, w - 16, h - 16, 26);
+            vrCardCtx.fill();
+
+            // Outer glowing border
+            vrCardCtx.lineWidth = 4;
+            vrCardCtx.strokeStyle = game.active ? '#f59e0b' : (info.colorHex || '#38bdf8');
+            vrCardCtx.stroke();
+
+            // Header bar
+            vrCardCtx.fillStyle = game.active ? 'rgba(42, 22, 12, 0.92)' : 'rgba(14, 30, 60, 0.88)';
+            vrCardCtx.beginPath();
+            vrCardCtx.roundRect(24, 24, w - 48, 88, 16);
+            vrCardCtx.fill();
+
+            // Color pill indicator
+            vrCardCtx.fillStyle = game.active ? '#f59e0b' : (info.colorHex || '#38bdf8');
+            vrCardCtx.beginPath();
+            vrCardCtx.roundRect(42, 42, 14, 52, 6);
+            vrCardCtx.fill();
+
+            // Kicker & Component / Game Title
+            vrCardCtx.fillStyle = game.active ? '#fbbf24' : '#38bdf8';
+            vrCardCtx.font = '700 20px "JetBrains Mono", monospace';
+            vrCardCtx.textAlign = 'left';
+            if (game.active) {
+                vrCardCtx.fillText(
+                    `MISI GAME VR CRISPR · SKOR ${game.score} · COMBO x${game.combo} · SISA ${Math.ceil(game.timeRemainingSec)}d`,
+                    72,
+                    56
+                );
+                vrCardCtx.fillStyle = '#f8fafc';
+                vrCardCtx.font = '700 31px "Plus Jakarta Sans", sans-serif';
+                vrCardCtx.fillText(
+                    `Target #${game.targetPairIndex + 1}: Perbaiki Basa ${game.targetBaseType} ⇄ ${game.complementBaseType} (${game.lesionLabel})`,
+                    72,
+                    94
+                );
+            } else {
+                vrCardCtx.fillText(
+                    hoveredKey && hoveredKey !== compKey
+                        ? `MEMINDAI TARGET XR · DWELL ${Math.round(dwellPct * 100)}%`
+                        : 'INSPEKTOR HOLOGRAFIK 3D WEBXR · KOMPATIBEL SEMUA VR',
+                    72,
+                    56
+                );
+                vrCardCtx.fillStyle = '#f8fafc';
+                vrCardCtx.font = '700 34px "Plus Jakarta Sans", sans-serif';
+                vrCardCtx.fillText(info.name, 72, 94);
+            }
+
+            // Dwell progress bar in top-right if scanning
+            if (dwellPct > 0.02 && dwellPct < 1.0) {
+                vrCardCtx.fillStyle = 'rgba(56, 189, 248, 0.2)';
+                vrCardCtx.beginPath();
+                vrCardCtx.roundRect(w - 220, 48, 176, 18, 9);
+                vrCardCtx.fill();
+
+                vrCardCtx.fillStyle = '#34d399';
+                vrCardCtx.beginPath();
+                vrCardCtx.roundRect(w - 220, 48, Math.max(12, 176 * dwellPct), 18, 9);
+                vrCardCtx.fill();
+            }
+
+            // Subtitle class or Game Event Banner
+            vrCardCtx.fillStyle = game.active && game.lastEventLabel ? '#34d399' : '#94a3b8';
+            vrCardCtx.font = '600 22px "Plus Jakarta Sans", sans-serif';
+            vrCardCtx.fillText(
+                game.active && game.lastEventLabel ? game.lastEventLabel : info.class,
+                36,
+                148
+            );
+
+            // 4 Metric Boxes (2x2 Grid)
+            const metrics = game.active
+                ? [
+                      { lbl: 'TARGET NUKLEOTIDA', val: `Pasangan #${game.targetPairIndex + 1} (${game.targetBaseType})` },
+                      { lbl: 'PASANGAN WATSON-CRICK', val: `${game.targetBaseType} ⇄ ${game.complementBaseType} (${game.targetBaseType === 'G' || game.targetBaseType === 'C' ? '3 Ikatan H' : '2 Ikatan H'})` },
+                      { lbl: 'TOTAL LESI DIPERBAIKI', val: `${game.repairedCount} Lokasi Heliks` },
+                      { lbl: 'SKOR & STREAK AKURASI', val: `${game.score} Poin (x${game.combo})` }
+                  ]
+                : [
+                      { lbl: 'RUMUS KIMIA', val: info.formula },
+                      { lbl: 'MASSA MOLAR', val: info.weight },
+                      { lbl: 'PASANGAN KOMPLEMENTER', val: info.partner },
+                      { lbl: 'KONFIGURASI IKATAN', val: info.bonds }
+                  ];
+            metrics.forEach((m, idx) => {
+                const col = idx % 2;
+                const row = Math.floor(idx / 2);
+                const bx = 32 + col * 484;
+                const by = 172 + row * 102;
+                const bw = 468;
+                const bh = 88;
+
+                vrCardCtx.fillStyle = 'rgba(13, 25, 48, 0.85)';
+                vrCardCtx.strokeStyle = 'rgba(148, 163, 184, 0.24)';
+                vrCardCtx.lineWidth = 2;
+                vrCardCtx.beginPath();
+                vrCardCtx.roundRect(bx, by, bw, bh, 12);
+                vrCardCtx.fill();
+                vrCardCtx.stroke();
+
+                vrCardCtx.fillStyle = '#64748b';
+                vrCardCtx.font = '700 17px "JetBrains Mono", monospace';
+                vrCardCtx.fillText(m.lbl, bx + 18, by + 30);
+
+                vrCardCtx.fillStyle = '#e0f2fe';
+                vrCardCtx.font = '700 23px "JetBrains Mono", "Plus Jakarta Sans", sans-serif';
+                const clippedVal = m.val.length > 34 ? m.val.slice(0, 33) + '…' : m.val;
+                vrCardCtx.fillText(clippedVal, bx + 18, by + 66);
+            });
+
+            // Function & Structural Significance Box
+            vrCardCtx.fillStyle = 'rgba(10, 22, 44, 0.9)';
+            vrCardCtx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
+            vrCardCtx.lineWidth = 2;
+            vrCardCtx.beginPath();
+            vrCardCtx.roundRect(32, 386, w - 64, 174, 14);
+            vrCardCtx.fill();
+            vrCardCtx.stroke();
+
+            vrCardCtx.fillStyle = '#38bdf8';
+            vrCardCtx.font = '700 18px "JetBrains Mono", monospace';
+            vrCardCtx.fillText(
+                game.active
+                    ? 'INSTRUKSI GAME VR UNIVERSAL (QUEST · PICO · VIVE · GAMEPAD · 360°)'
+                    : 'FUNGSI BIOLOGIS & SIGNIFIKANSI STRUKTURAL',
+                52,
+                418
+            );
+
+            // Word-wrap description + function
+            vrCardCtx.fillStyle = '#cbd5e1';
+            vrCardCtx.font = '500 21px "Plus Jakarta Sans", sans-serif';
+            const textToWrap = game.active
+                ? `Bidik cincin target bercahaya pada pasangan basa #${game.targetPairIndex + 1} (${game.targetBaseType}⇄${game.complementBaseType}) dengan Sinar Laser VR, Tatapan Gaze (0.85d), Tombol A Gamepad, atau Spasi/Klik untuk memperbaiki mutasi DNA secara real-time.`
+                : `${info.desc} ${info.func}`;
+            const words = textToWrap.split(' ');
+            let line = '';
+            let ty = 452;
+            const maxLineWidth = w - 108;
+            for (let i = 0; i < words.length; i++) {
+                const testLine = line + words[i] + ' ';
+                if (vrCardCtx.measureText(testLine).width > maxLineWidth && i > 0) {
+                    vrCardCtx.fillText(line.trim(), 52, ty);
+                    line = words[i] + ' ';
+                    ty += 30;
+                    if (ty > 542) {
+                        line = line.trim() + '…';
+                        break;
+                    }
+                } else {
+                    line = testLine;
+                }
+            }
+            if (ty <= 542 && line.trim()) {
+                vrCardCtx.fillText(line.trim(), 52, ty);
+            }
+
+            // Footer instruction
+            vrCardCtx.fillStyle = '#94a3b8';
+            vrCardCtx.font = '600 16px "JetBrains Mono", monospace';
+            vrCardCtx.fillText(
+                'KONTROL VR & HAND: Cubit (Pinch)/Trigger = Pilih · Cubit+Geser/Grip = Putar Heliks · Stick/WASD = Gerak',
+                32,
+                602
+            );
+
+            vrCardTexture.needsUpdate = true;
+        };
+
+        vrFloatingCardUpdaterRef.current = drawFloatingVrInspectorCard;
+        drawFloatingVrInspectorCard(stateRef.current.selectedComponentKey || 'A', null, 0);
+
+        // Composite 3D Holographic Card Mesh Group (Backing Plate + Neon Bevel Rim + High-DPI Screen)
+        const vrInspectorCardGroup = new THREE.Group();
+        const cardBackingGeo = new THREE.BoxGeometry(11.6, 7.3, 0.16);
+        const cardBackingMat = new THREE.MeshPhysicalMaterial({
+            color: 0x071328,
+            roughness: 0.22,
+            metalness: 0.75,
+            clearcoat: 0.9,
+            emissive: 0x0c4a6e,
+            emissiveIntensity: 0.25,
+            depthWrite: true,
+            depthTest: true
+        });
+        const cardBackingMesh = new THREE.Mesh(cardBackingGeo, cardBackingMat);
+        cardBackingMesh.position.z = -0.10;
+        cardBackingMesh.renderOrder = 28;
+        cardBackingMesh.userData = { isVrCardBoard: true };
+        vrInspectorCardGroup.add(cardBackingMesh);
+
+        const cardScreenGeo = new THREE.PlaneGeometry(11.2, 7.0);
+        const cardScreenMat = new THREE.MeshBasicMaterial({
+            map: vrCardTexture,
+            transparent: true,
+            side: THREE.DoubleSide,
+            depthWrite: true,
+            depthTest: true,
+            polygonOffset: true,
+            polygonOffsetFactor: -2,
+            polygonOffsetUnits: -2
+        });
+        const cardScreenMesh = new THREE.Mesh(cardScreenGeo, cardScreenMat);
+        cardScreenMesh.renderOrder = 29;
+        cardScreenMesh.userData = { isVrCardBoard: true };
+        vrInspectorCardGroup.add(cardScreenMesh);
+
+        vrInspectorCardGroup.position.set(-14.5, 2.0, 2.0);
+        vrEnvGroup.add(vrInspectorCardGroup);
+
+        // 3D Leader Line connecting the Floating VR Card to the inspected DNA nucleotide
+        const vrLeaderLineGeo = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(-8.8, 2.0, 2.0),
+            new THREE.Vector3(0, 0, 0)
+        ]);
+        const vrLeaderLineMat = new THREE.LineBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 0.65,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const vrLeaderLine = new THREE.Line(vrLeaderLineGeo, vrLeaderLineMat);
+        vrLeaderLine.renderOrder = 27;
+        vrEnvGroup.add(vrLeaderLine);
+
+        const getActiveInteractiveDnaMeshes = (): THREE.Mesh[] => {
             const activeMeshes: THREE.Mesh[] = [];
+            if (!dnaGroupRef.current) return activeMeshes;
             dnaGroupRef.current.traverse(child => {
                 if ((child as THREE.Mesh).isMesh && child.userData && child.userData.type) {
                     let isParentVisible = true;
@@ -1496,34 +2047,1169 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     if (isParentVisible) activeMeshes.push(child as THREE.Mesh);
                 }
             });
+            return activeMeshes;
+        };
 
-            const hits = vrRaycaster.intersectObjects(activeMeshes, false);
-            if (hits.length > 0) {
-                const hitObj = hits[0].object;
-                const type = hitObj.userData.type;
-                if (type) {
-                    const tg = hitObj.userData.parentGroup || hitObj;
-                    last3dClickedRef.current = { type, object: tg, time: performance.now() };
-                    onSelectComponent(type);
-                    bloomPulseBoostRef.current = 0.20;
-                    const origScale = tg.scale.clone();
-                    animateVector(tg.scale, origScale.clone().multiplyScalar(1.25), 200, easeOutBack);
-                    setTimeout(() => animateVector(tg.scale, origScale, 300, easeInOutCubic), 220);
+        // Helper to spawn a new CRISPR target base pair on the 3D DNA helix
+        const complementMapGame: Record<string, string> = { A: 'T', T: 'A', G: 'C', C: 'G' };
+        const lesionTypes = [
+            'Mismatch Watson-Crick',
+            'Adduksi Epigenetik 5-mC',
+            'Dimer Timin Siklobutana (UV)',
+            'Distorsi Cincin Aromatik'
+        ];
+
+        const pickNextVrGameTarget = (avoidPairIdx?: number) => {
+            const totalPairs = Math.max(1, pairDynamicContainersRef.current.length || 24);
+            let nextIdx = Math.floor(Math.random() * totalPairs);
+            if (totalPairs > 2 && nextIdx === avoidPairIdx) {
+                nextIdx = (nextIdx + 3) % totalPairs;
+            }
+            const cleanSeq = calculateSequenceStats(stateRef.current.sequence).clean || 'ATGC';
+            const b1 = cleanSeq[nextIdx % cleanSeq.length] || 'A';
+            const b2 = complementMapGame[b1] || 'T';
+            const lesion = lesionTypes[(nextIdx + vrGameStateRef.current.repairedCount) % lesionTypes.length];
+
+            vrGameStateRef.current.targetPairIndex = nextIdx;
+            vrGameStateRef.current.targetBaseType = b1;
+            vrGameStateRef.current.complementBaseType = b2;
+            vrGameStateRef.current.lesionLabel = lesion;
+        };
+
+        const emitVrGameTelemetryNow = () => {
+            if (onUpdateVrGameTelemetry) {
+                onUpdateVrGameTelemetry({ ...vrGameStateRef.current });
+            }
+        };
+
+        const triggerVrComponentSelect = (hitObj: THREE.Object3D) => {
+            const type = hitObj.userData?.type;
+            if (!type) return;
+            const pairIdx = typeof hitObj.userData?.pairIndex === 'number' ? hitObj.userData.pairIndex : -1;
+            const tg = hitObj.userData.parentGroup || hitObj;
+
+            // Check if Interactive VR CRISPR Repair Game is active
+            if (vrGameStateRef.current.active) {
+                const g = vrGameStateRef.current;
+                const isExactPairMatch = pairIdx === g.targetPairIndex;
+                const isBaseMatch =
+                    type === g.targetBaseType ||
+                    type === g.complementBaseType ||
+                    (type === 'hbond' && isExactPairMatch);
+
+                if (isExactPairMatch || isBaseMatch) {
+                    const pointsEarned = (isExactPairMatch ? 150 : 100) * g.combo;
+                    g.score += pointsEarned;
+                    g.repairedCount += 1;
+                    g.combo = Math.min(10, g.combo + 1);
+                    g.timeRemainingSec = Math.min(90, g.timeRemainingSec + 3.5);
+                    g.lastEventLabel = `PERBAIKAN BERHASIL! +${pointsEarned} Poin (${g.targetBaseType}⇄${g.complementBaseType} Stabil)`;
+
+                    vrSound.playRepairSuccess(g.combo);
+                    triggerUniversalXrHaptics(xrSessionRef.current, 0.9, 85);
+                    pickNextVrGameTarget(pairIdx);
+                    emitVrGameTelemetryNow();
+                } else {
+                    g.combo = 1;
+                    g.lastEventLabel = `Bukan Target! Bidik Pasangan #${g.targetPairIndex + 1} (${g.targetBaseType}⇄${g.complementBaseType})`;
+                    vrSound.playMissWarning();
+                    triggerUniversalXrHaptics(xrSessionRef.current, 0.35, 40);
+                    emitVrGameTelemetryNow();
+                }
+            } else {
+                vrSound.playSelectLock(type);
+                triggerUniversalXrHaptics(xrSessionRef.current, 0.65, 45);
+            }
+
+            last3dClickedRef.current = { type, object: tg, time: performance.now() };
+            onSelectComponent(type);
+            drawFloatingVrInspectorCard(type, type, 1.0);
+            bloomPulseBoostRef.current = 0.24;
+            const origScale = tg.scale.clone();
+            animateVector(tg.scale, origScale.clone().multiplyScalar(1.26), 200, easeOutBack);
+            setTimeout(() => animateVector(tg.scale, origScale, 300, easeInOutCubic), 220);
+        };
+        vrComponentSelectTriggerRef.current = triggerVrComponentSelect;
+
+        // ============================================================================
+        // UNIFIED MULTI-HEADSET XR RAYCASTER & TRIGGER NORMALIZATION ENGINE
+        // Supports Meta Quest 2/3/Pro, Pico 4/Neo3, Valve Index, HTC Vive, Windows MR,
+        // Apple Vision Pro (Transient Eye+Pinch), Hand-Tracking, Gamepad & 360° Gaze
+        // ============================================================================
+        const scratchRayOrigin = new THREE.Vector3();
+        const scratchRayDir = new THREE.Vector3();
+        const scratchCtrlQuat = new THREE.Quaternion();
+        const scratchPitchQuat = new THREE.Quaternion();
+        const scratchRigQuat = new THREE.Quaternion();
+        const scratchScale = new THREE.Vector3();
+        const scratchRightAxis = new THREE.Vector3(1, 0, 0);
+        const scratchMeshWorldPos = new THREE.Vector3();
+        const scratchClosestRayPt = new THREE.Vector3();
+        const scratchXrCamPos = new THREE.Vector3();
+        const scratchGrabPos = new THREE.Vector3();
+
+        interface NormalizedXrAxesState {
+            primaryX: number;
+            primaryY: number;
+            thumbstickX: number;
+            thumbstickY: number;
+            touchpadX: number;
+            touchpadY: number;
+        }
+
+        interface UnifiedControllerSlotState {
+            index: number;
+            controller: THREE.Object3D;
+            laserLine: THREE.Line;
+            laserMat: THREE.LineBasicMaterial;
+            handedness: 'left' | 'right' | 'none';
+            targetRayMode: 'tracked-pointer' | 'gaze' | 'screen' | 'transient-pointer';
+            runtimeProfile: XrRuntimeProfile;
+            pitchOffsetRad: number;
+            triggerPressed: boolean;
+            triggerValue: number;
+            squeezePressed: boolean;
+            squeezeValue: number;
+            thumbstickClickPressed: boolean;
+            secondaryButtonPressed: boolean;
+            axesNorm: NormalizedXrAxesState;
+            lastSelectTimeMs: number;
+            lastActiveTimeMs: number;
+            prevWorldDir: THREE.Vector3;
+        }
+
+        const SELECT_DEBOUNCE_MS = 165;
+        const TRIGGER_PRESS_THRESHOLD = 0.54;
+        const TRIGGER_RELEASE_THRESHOLD = 0.32;
+        const SQUEEZE_PRESS_THRESHOLD = 0.58;
+        const SQUEEZE_RELEASE_THRESHOLD = 0.35;
+        const THUMBSTICK_RADIAL_DEADZONE = 0.15;
+        const TOUCHPAD_RADIAL_DEADZONE = 0.18;
+
+        const detectXrRuntimeProfile = (source?: XRInputSource | null): { profile: XrRuntimeProfile; pitchOffsetRad: number } => {
+            if (!source) return { profile: 'generic_xr', pitchOffsetRad: 0 };
+            if (source.targetRayMode === 'transient-pointer') {
+                return { profile: 'vision_pro_hand', pitchOffsetRad: 0 };
+            }
+            if (source.targetRayMode === 'gaze') {
+                return { profile: 'gaze', pitchOffsetRad: 0 };
+            }
+            const profiles = (source.profiles || []).map(p => p.toLowerCase());
+            for (const p of profiles) {
+                if (p.includes('meta-quest') || p.includes('oculus-touch')) {
+                    return { profile: 'meta_quest', pitchOffsetRad: 0 };
+                }
+                if (p.includes('pico') || p.includes('bytedance')) {
+                    return { profile: 'pico_xr', pitchOffsetRad: 0 };
+                }
+                if (p.includes('valve-index')) {
+                    return { profile: 'valve_index', pitchOffsetRad: -0.025 };
+                }
+                if (p.includes('htc-vive')) {
+                    return { profile: 'htc_vive', pitchOffsetRad: -0.045 };
+                }
+                if (p.includes('microsoft-mixed-reality') || p.includes('windows-mixed-reality') || p.includes('samsung-odyssey')) {
+                    return { profile: 'wmr', pitchOffsetRad: -0.035 };
+                }
+                if (p.includes('apple-vision') || p.includes('hand')) {
+                    return { profile: 'vision_pro_hand', pitchOffsetRad: 0 };
                 }
             }
+            return { profile: 'generic_xr', pitchOffsetRad: 0 };
+        };
+
+        // Apply calibrated radial deadzone with smooth non-linear response curve (zero heap allocation)
+        const applyRadialDeadzonePair = (
+            rawX: number,
+            rawY: number,
+            deadzone: number,
+            outPair: { x: number; y: number; mag: number }
+        ) => {
+            const sx = Number.isFinite(rawX) ? rawX : 0;
+            const sy = Number.isFinite(rawY) ? rawY : 0;
+            const mag = Math.hypot(sx, sy);
+            if (mag <= deadzone) {
+                outPair.x = 0;
+                outPair.y = 0;
+                outPair.mag = 0;
+                return;
+            }
+            const clampedMag = Math.min(1.0, mag);
+            const rescaledMag = Math.pow((clampedMag - deadzone) / (1.0 - deadzone), 1.12);
+            const invMag = 1.0 / mag;
+            outPair.x = sx * invMag * rescaledMag;
+            outPair.y = sy * invMag * rescaledMag;
+            outPair.mag = rescaledMag;
+        };
+
+        const scratchPair01 = { x: 0, y: 0, mag: 0 };
+        const scratchPair23 = { x: 0, y: 0, mag: 0 };
+
+        /**
+         * Standardized WebXR InputSource API Normalizer:
+         * Reconciles `xr-standard` 4-axis gamepads (axes[0,1]=Touchpad, axes[2,3]=Thumbstick)
+         * with 2-axis controllers (Vive Wand trackpad, legacy Pico/Oculus Go) and normalizes
+         * Trigger (b0), Squeeze/Grip (b1), Touchpad Click (b2), Thumbstick Click (b3),
+         * Primary Face Button A/X (b4), and Secondary Face Button B/Y/Menu (b5).
+         */
+        const normalizeXrInputSourceState = (
+            slot: UnifiedControllerSlotState,
+            source: XRInputSource
+        ): {
+            effectiveTriggerVal: number;
+            effectiveSqueezeVal: number;
+            thumbstickClickedEdge: boolean;
+            secondaryButtonEdge: boolean;
+        } => {
+            const gp = source.gamepad;
+            const norm = slot.axesNorm;
+            norm.primaryX = 0;
+            norm.primaryY = 0;
+            norm.thumbstickX = 0;
+            norm.thumbstickY = 0;
+            norm.touchpadX = 0;
+            norm.touchpadY = 0;
+
+            if (!gp) {
+                return {
+                    effectiveTriggerVal: 0,
+                    effectiveSqueezeVal: 0,
+                    thumbstickClickedEdge: false,
+                    secondaryButtonEdge: false
+                };
+            }
+
+            // 1. Normalize Controller Axes across Meta Quest, Pico, HTC Vive, Valve Index, and WMR
+            const axes = gp.axes || [];
+            const isTouchpadPrimaryRuntime = slot.runtimeProfile === 'htc_vive';
+            const dz01 = isTouchpadPrimaryRuntime || axes.length >= 4 ? TOUCHPAD_RADIAL_DEADZONE : THUMBSTICK_RADIAL_DEADZONE;
+
+            if (axes.length >= 2) {
+                applyRadialDeadzonePair(axes[0], axes[1], dz01, scratchPair01);
+            } else {
+                scratchPair01.x = 0;
+                scratchPair01.y = 0;
+                scratchPair01.mag = 0;
+            }
+
+            if (axes.length >= 4) {
+                applyRadialDeadzonePair(axes[2], axes[3], THUMBSTICK_RADIAL_DEADZONE, scratchPair23);
+                norm.touchpadX = scratchPair01.x;
+                norm.touchpadY = scratchPair01.y;
+                norm.thumbstickX = scratchPair23.x;
+                norm.thumbstickY = scratchPair23.y;
+
+                // Prefer thumbstick [2,3] unless touchpad [0,1] has stronger active deflection (e.g. Vive / WMR / Index trackpad swipe)
+                if (scratchPair23.mag >= scratchPair01.mag || scratchPair23.mag > 0.04) {
+                    norm.primaryX = scratchPair23.x;
+                    norm.primaryY = scratchPair23.y;
+                } else {
+                    norm.primaryX = scratchPair01.x;
+                    norm.primaryY = scratchPair01.y;
+                }
+            } else if (axes.length >= 2) {
+                norm.thumbstickX = scratchPair01.x;
+                norm.thumbstickY = scratchPair01.y;
+                norm.touchpadX = scratchPair01.x;
+                norm.touchpadY = scratchPair01.y;
+                norm.primaryX = scratchPair01.x;
+                norm.primaryY = scratchPair01.y;
+            }
+
+            // 2. Normalize Buttons & Analog Triggers across XR Runtimes
+            const buttons = gp.buttons || [];
+            const b0Val = buttons[0]?.value ?? (buttons[0]?.pressed ? 1 : 0); // Primary Trigger (select)
+            const b1Val = buttons[1]?.value ?? (buttons[1]?.pressed ? 1 : 0); // Squeeze / Grip
+            const b2Pressed = Boolean(buttons[2]?.pressed);                   // Touchpad Click (Vive / WMR / Index)
+            const b3Pressed = Boolean(buttons[3]?.pressed);                   // Thumbstick Click L3/R3 (Quest / Pico / Index)
+            const b4Pressed = Boolean(buttons[4]?.pressed);                   // Primary Face Button A / X (Quest / Pico / Index)
+            const b5Pressed = Boolean(buttons[5]?.pressed);                   // Secondary Face Button B / Y / Menu
+
+            // On HTC Vive Wands, touchpad click (b2) only acts as select when the user isn't deflecting the outer rim for locomotion
+            const touchpadSelectActive = b2Pressed && scratchPair01.mag < 0.45;
+            const effectiveTriggerVal = Math.max(b0Val, touchpadSelectActive ? 1 : 0, b4Pressed ? 1 : 0);
+            const effectiveSqueezeVal = b1Val;
+
+            const thumbstickClickedEdge = b3Pressed && !slot.thumbstickClickPressed;
+            slot.thumbstickClickPressed = b3Pressed;
+
+            const secondaryButtonEdge = b5Pressed && !slot.secondaryButtonPressed;
+            slot.secondaryButtonPressed = b5Pressed;
+
+            return {
+                effectiveTriggerVal,
+                effectiveSqueezeVal,
+                thumbstickClickedEdge,
+                secondaryButtonEdge
+            };
+        };
+
+        // Extract normalized world-space ray origin & direction across heterogeneous XR runtimes
+        const configureUnifiedRayFromController = (
+            slot: UnifiedControllerSlotState,
+            inputSource?: XRInputSource | null,
+            xrFrame?: XRFrame
+        ): boolean => {
+            vrRigGroup.updateWorldMatrix(true, false);
+            let poseExtracted = false;
+
+            // 1. Prefer WebXR native targetRaySpace pose when XRFrame & ReferenceSpace are available
+            if (xrFrame && inputSource && inputSource.targetRaySpace) {
+                try {
+                    const refSpace = renderer.xr.getReferenceSpace();
+                    if (refSpace) {
+                        const rayPose = xrFrame.getPose(inputSource.targetRaySpace, refSpace);
+                        if (rayPose) {
+                            const pos = rayPose.transform.position;
+                            const ori = rayPose.transform.orientation;
+                            scratchRayOrigin.set(pos.x, pos.y, pos.z).applyMatrix4(vrRigGroup.matrixWorld);
+                            scratchCtrlQuat.set(ori.x, ori.y, ori.z, ori.w);
+                            vrRigGroup.getWorldQuaternion(scratchRigQuat);
+                            scratchCtrlQuat.premultiply(scratchRigQuat);
+                            poseExtracted = true;
+                        }
+                    }
+                } catch {
+                    // Fallback to controller.matrixWorld below
+                }
+            }
+
+            // 2. Fallback to Three.js WebXRManager controller matrixWorld decomposition
+            if (!poseExtracted) {
+                slot.controller.updateWorldMatrix(true, false);
+                slot.controller.matrixWorld.decompose(scratchRayOrigin, scratchCtrlQuat, scratchScale);
+                if (scratchRayOrigin.lengthSq() > 0.00001 || scratchCtrlQuat.lengthSq() > 0.0001) {
+                    poseExtracted = true;
+                }
+            }
+
+            if (!poseExtracted) return false;
+
+            // Apply runtime-specific ergonomic pitch calibration offset if needed
+            if (slot.pitchOffsetRad !== 0) {
+                scratchPitchQuat.setFromAxisAngle(scratchRightAxis, slot.pitchOffsetRad);
+                scratchCtrlQuat.multiply(scratchPitchQuat);
+            }
+
+            scratchRayDir.set(0, 0, -1).applyQuaternion(scratchCtrlQuat).normalize();
+            vrRaycaster.set(scratchRayOrigin, scratchRayDir);
+
+            // Detect angular motion to automatically promote the actively moving hand controller
+            if (slot.prevWorldDir.distanceToSquared(scratchRayDir) > 0.00025) {
+                slot.lastActiveTimeMs = performance.now();
+                slot.prevWorldDir.copy(scratchRayDir);
+            }
+
+            return true;
+        };
+
+        // Raycast against interactive DNA meshes with sub-Angstrom magnetic aim-assist for VR hand stability
+        const intersectDnaWithMagneticAssist = (
+            activeMeshes: THREE.Mesh[],
+            isXrPresenting: boolean
+        ): THREE.Intersection | null => {
+            const directHits = vrRaycaster.intersectObjects(activeMeshes, false);
+            if (directHits.length > 0) {
+                return directHits[0];
+            }
+
+            // Magnetic proximity cone snap when pointing closely at small atomic spheres in VR
+            const snapRadius = isXrPresenting ? 0.075 : 0.36;
+            const snapRadiusSq = snapRadius * snapRadius;
+            let bestMesh: THREE.Mesh | null = null;
+            let bestDistAlongRay = Infinity;
+            let bestPerpDistSq = snapRadiusSq;
+            const bestHitPoint = new THREE.Vector3();
+
+            for (let i = 0; i < activeMeshes.length; i++) {
+                const mesh = activeMeshes[i];
+                mesh.getWorldPosition(scratchMeshWorldPos);
+                const toMeshDist = vrRaycaster.ray.origin.distanceTo(scratchMeshWorldPos);
+                if (toMeshDist < vrRaycaster.near || toMeshDist > vrRaycaster.far) continue;
+
+                vrRaycaster.ray.closestPointToPoint(scratchMeshWorldPos, scratchClosestRayPt);
+                // Ensure the closest point is in front of the ray origin
+                if (scratchClosestRayPt.distanceToSquared(vrRaycaster.ray.origin) < 0.0004) continue;
+
+                const perpDistSq = scratchClosestRayPt.distanceToSquared(scratchMeshWorldPos);
+                if (perpDistSq < bestPerpDistSq || (perpDistSq <= bestPerpDistSq * 1.15 && toMeshDist < bestDistAlongRay)) {
+                    bestPerpDistSq = perpDistSq;
+                    bestDistAlongRay = toMeshDist;
+                    bestMesh = mesh;
+                    bestHitPoint.copy(scratchMeshWorldPos);
+                }
+            }
+
+            if (bestMesh) {
+                return {
+                    distance: bestDistAlongRay,
+                    point: bestHitPoint,
+                    object: bestMesh
+                };
+            }
+            return null;
+        };
+
+        // ============================================================================
+        // WEBXR HAND INPUT API (W3C XRHand 25-Joint Articulated Skeleton & Gestures)
+        // Supports Pinch-to-Select, Pinch-Hold Drag-to-Rotate/Elevate, Bimanual Scale,
+        // Direct Fingertip Touch Proximity, and Whole-Hand Fist Grab
+        // ============================================================================
+        const XR_HAND_JOINT_NAMES: readonly string[] = [
+            'wrist', // 0
+            'thumb-metacarpal', // 1
+            'thumb-phalanx-proximal', // 2
+            'thumb-phalanx-distal', // 3
+            'thumb-tip', // 4
+            'index-finger-metacarpal', // 5
+            'index-finger-phalanx-proximal', // 6
+            'index-finger-phalanx-intermediate', // 7
+            'index-finger-phalanx-distal', // 8
+            'index-finger-tip', // 9
+            'middle-finger-metacarpal', // 10
+            'middle-finger-phalanx-proximal', // 11
+            'middle-finger-phalanx-intermediate', // 12
+            'middle-finger-phalanx-distal', // 13
+            'middle-finger-tip', // 14
+            'ring-finger-metacarpal', // 15
+            'ring-finger-phalanx-proximal', // 16
+            'ring-finger-phalanx-intermediate', // 17
+            'ring-finger-phalanx-distal', // 18
+            'ring-finger-tip', // 19
+            'pinky-finger-metacarpal', // 20
+            'pinky-finger-phalanx-proximal', // 21
+            'pinky-finger-phalanx-intermediate', // 22
+            'pinky-finger-phalanx-distal', // 23
+            'pinky-finger-tip' // 24
+        ];
+
+        const XR_HAND_BONE_PAIRS: readonly [number, number][] = [
+            // Thumb chain
+            [0, 1], [1, 2], [2, 3], [3, 4],
+            // Index chain
+            [0, 5], [5, 6], [6, 7], [7, 8], [8, 9],
+            // Middle chain
+            [0, 10], [10, 11], [11, 12], [12, 13], [13, 14],
+            // Ring chain
+            [0, 15], [15, 16], [16, 17], [17, 18], [18, 19],
+            // Pinky chain
+            [0, 20], [20, 21], [21, 22], [22, 23], [23, 24]
+        ];
+
+        const sharedHandJointGeo = new THREE.IcosahedronGeometry(1.0, 1);
+        const sharedPinchOrbGeo = new THREE.SphereGeometry(0.011, 14, 14);
+        const sharedPinchRingGeo = new THREE.RingGeometry(0.014, 0.021, 24);
+
+        interface HandSkeletonVisualRig {
+            group: THREE.Group;
+            jointMeshes: THREE.Mesh[];
+            boneGeo: THREE.BufferGeometry;
+            boneLines: THREE.LineSegments;
+            boneMat: THREE.LineBasicMaterial;
+            jointMat: THREE.MeshBasicMaterial;
+            tipMat: THREE.MeshBasicMaterial;
+            pinchOrbMesh: THREE.Mesh;
+            pinchOrbMat: THREE.MeshBasicMaterial;
+            pinchRingMesh: THREE.Mesh;
+            pinchRingMat: THREE.MeshBasicMaterial;
+        }
+
+        const buildXrHandSkeletonRig = (accentHex: number): HandSkeletonVisualRig => {
+            const group = new THREE.Group();
+            group.visible = false;
+            group.renderOrder = 31;
+
+            const jointMat = new THREE.MeshBasicMaterial({
+                color: accentHex,
+                transparent: true,
+                opacity: 0.78
+            });
+            const tipMat = new THREE.MeshBasicMaterial({
+                color: 0xf8fafc,
+                transparent: true,
+                opacity: 0.95
+            });
+
+            const fingertipIndices = new Set([4, 9, 14, 19, 24]);
+            const jointMeshes: THREE.Mesh[] = [];
+            for (let j = 0; j < XR_HAND_JOINT_NAMES.length; j++) {
+                const isTip = fingertipIndices.has(j);
+                const m = new THREE.Mesh(sharedHandJointGeo, isTip ? tipMat : jointMat);
+                const defaultRadius = j === 0 ? 0.014 : isTip ? 0.0085 : 0.0075;
+                m.scale.setScalar(defaultRadius);
+                m.renderOrder = 31;
+                group.add(m);
+                jointMeshes.push(m);
+            }
+
+            const boneVertices = new Float32Array(XR_HAND_BONE_PAIRS.length * 2 * 3);
+            const boneGeo = new THREE.BufferGeometry();
+            boneGeo.setAttribute('position', new THREE.BufferAttribute(boneVertices, 3));
+            const boneMat = new THREE.LineBasicMaterial({
+                color: accentHex,
+                transparent: true,
+                opacity: 0.85,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+            const boneLines = new THREE.LineSegments(boneGeo, boneMat);
+            boneLines.renderOrder = 31;
+            boneLines.frustumCulled = false;
+            group.add(boneLines);
+
+            const pinchOrbMat = new THREE.MeshBasicMaterial({
+                color: accentHex,
+                transparent: true,
+                opacity: 0.88,
+                blending: THREE.AdditiveBlending,
+                depthTest: false
+            });
+            const pinchOrbMesh = new THREE.Mesh(sharedPinchOrbGeo, pinchOrbMat);
+            pinchOrbMesh.renderOrder = 33;
+            group.add(pinchOrbMesh);
+
+            const pinchRingMat = new THREE.MeshBasicMaterial({
+                color: 0xfbbf24,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.85,
+                blending: THREE.AdditiveBlending,
+                depthTest: false
+            });
+            const pinchRingMesh = new THREE.Mesh(sharedPinchRingGeo, pinchRingMat);
+            pinchRingMesh.renderOrder = 33;
+            pinchOrbMesh.add(pinchRingMesh);
+
+            return {
+                group,
+                jointMeshes,
+                boneGeo,
+                boneLines,
+                boneMat,
+                jointMat,
+                tipMat,
+                pinchOrbMesh,
+                pinchOrbMat,
+                pinchRingMesh,
+                pinchRingMat
+            };
+        };
+
+        interface XrHandSlotState {
+            isHandTracking: boolean;
+            isPinching: boolean;
+            isDraggingHelix: boolean;
+            isFistGrabbing: boolean;
+            gesture: XrHandGestureState;
+            pinchStrength: number;
+            pinchDistanceMm: number;
+            jointWorldPositions: THREE.Vector3[];
+            jointValid: boolean[];
+            pinchMidpointWorld: THREE.Vector3;
+            pinchStartWorld: THREE.Vector3;
+            fistStartWorld: THREE.Vector3;
+            pinchStartTimeMs: number;
+            dragStartHelixRotY: number;
+            dragStartHelixRotX: number;
+            dragStartHelixPosY: number;
+            visualRig: HandSkeletonVisualRig;
+            wandGroup: THREE.Group;
+            xrHandSpace: THREE.Object3D;
+        }
+
+        const createInitialHandSlotState = (
+            accentHex: number,
+            wandGroup: THREE.Group,
+            xrHandSpace: THREE.Object3D
+        ): XrHandSlotState => {
+            const visualRig = buildXrHandSkeletonRig(accentHex);
+            scene.add(visualRig.group);
+            const jointWorldPositions: THREE.Vector3[] = [];
+            const jointValid: boolean[] = [];
+            for (let j = 0; j < XR_HAND_JOINT_NAMES.length; j++) {
+                jointWorldPositions.push(new THREE.Vector3());
+                jointValid.push(false);
+            }
+            return {
+                isHandTracking: false,
+                isPinching: false,
+                isDraggingHelix: false,
+                isFistGrabbing: false,
+                gesture: 'none',
+                pinchStrength: 0,
+                pinchDistanceMm: 65,
+                jointWorldPositions,
+                jointValid,
+                pinchMidpointWorld: new THREE.Vector3(),
+                pinchStartWorld: new THREE.Vector3(),
+                fistStartWorld: new THREE.Vector3(),
+                pinchStartTimeMs: 0,
+                dragStartHelixRotY: 0,
+                dragStartHelixRotX: 0.15,
+                dragStartHelixPosY: 1.45,
+                visualRig,
+                wandGroup,
+                xrHandSpace
+            };
         };
 
         const controller0 = renderer.xr.getController(0);
         const controller1 = renderer.xr.getController(1);
-        controller0.add(new THREE.Line(laserGeo, laserMat));
-        controller1.add(new THREE.Line(laserGeo, laserMat));
-        controller0.addEventListener('selectstart', () => handleXrSelect(controller0));
-        controller1.addEventListener('selectstart', () => handleXrSelect(controller1));
-        scene.add(controller0);
-        scene.add(controller1);
+        const xrHand0 = renderer.xr.getHand(0);
+        const xrHand1 = renderer.xr.getHand(1);
+        vrRigGroup.add(xrHand0);
+        vrRigGroup.add(xrHand1);
 
-        // WebXR Session Start & End Handlers (adapts DNA scale & position for room-scale VR headsets)
+        const laserLine0 = new THREE.Line(laserGeo, laserMat0);
+        const laserLine1 = new THREE.Line(laserGeo, laserMat1);
+        laserLine0.renderOrder = 32;
+        laserLine1.renderOrder = 32;
+        laserLine0.scale.set(1, 1, 14);
+        laserLine1.scale.set(1, 1, 14);
+        controller0.add(laserLine0);
+        controller1.add(laserLine1);
+
+        const wandGroup0 = buildVrControllerWand(0x38bdf8);
+        const wandGroup1 = buildVrControllerWand(0x34d399);
+        controller0.add(wandGroup0);
+        controller1.add(wandGroup1);
+
+        const handSlots: XrHandSlotState[] = [
+            createInitialHandSlotState(0x38bdf8, wandGroup0, xrHand0),
+            createInitialHandSlotState(0x34d399, wandGroup1, xrHand1)
+        ];
+
+        // Bimanual Two-Hand Pinch Scale & Steering State
+        let bimanualPinchActive = false;
+        let bimanualStartDist = 0.25;
+        let bimanualStartScale = 0.085;
+        let bimanualStartAngle = 0;
+        let bimanualStartRotY = 0;
+
+        // Pre-allocated scratch vectors for zero-allocation WebXR Hand Input processing
+        const scratchJointLocalPos = new THREE.Vector3();
+        const scratchHandDragDelta = new THREE.Vector3();
+        const scratchHandAimDir = new THREE.Vector3();
+        const scratchDirectHitPt = new THREE.Vector3();
+
+        const PINCH_ENGAGE_METERS = 0.024; // 24 mm thumb-to-index tip distance to engage pinch
+        const PINCH_RELEASE_METERS = 0.035; // 35 mm to release pinch (hysteresis)
+        const PINCH_DRAG_DEADZONE_METERS = 0.018; // 18 mm movement threshold to transition from pinch-select to pinch-drag
+        const FIST_ENGAGE_METERS = 0.092; // 92 mm average fingertip-to-wrist distance to engage fist grab
+        const FIST_RELEASE_METERS = 0.115; // 115 mm to release fist grab
+
+        // Find interactive DNA mesh directly touched or approached by index fingertip / pinch point in 3D space
+        const findDirectHandProximityDnaHit = (
+            handPointWorld: THREE.Vector3,
+            activeMeshes: THREE.Mesh[],
+            maxReachMeters = 0.115
+        ): THREE.Intersection | null => {
+            const maxReachSq = maxReachMeters * maxReachMeters;
+            let bestMesh: THREE.Mesh | null = null;
+            let bestDistSq = maxReachSq;
+
+            for (let i = 0; i < activeMeshes.length; i++) {
+                const mesh = activeMeshes[i];
+                mesh.getWorldPosition(scratchMeshWorldPos);
+                const dSq = handPointWorld.distanceToSquared(scratchMeshWorldPos);
+                if (dSq < bestDistSq) {
+                    bestDistSq = dSq;
+                    bestMesh = mesh;
+                    scratchDirectHitPt.copy(scratchMeshWorldPos);
+                }
+            }
+
+            if (bestMesh) {
+                return {
+                    distance: Math.sqrt(bestDistSq),
+                    point: scratchDirectHitPt.clone(),
+                    object: bestMesh
+                };
+            }
+            return null;
+        };
+
+        const controllerSlots: UnifiedControllerSlotState[] = [
+            {
+                index: 0,
+                controller: controller0,
+                laserLine: laserLine0,
+                laserMat: laserMat0,
+                handedness: 'right',
+                targetRayMode: 'tracked-pointer',
+                runtimeProfile: 'generic_xr',
+                pitchOffsetRad: 0,
+                triggerPressed: false,
+                triggerValue: 0,
+                squeezePressed: false,
+                squeezeValue: 0,
+                thumbstickClickPressed: false,
+                secondaryButtonPressed: false,
+                axesNorm: { primaryX: 0, primaryY: 0, thumbstickX: 0, thumbstickY: 0, touchpadX: 0, touchpadY: 0 },
+                lastSelectTimeMs: 0,
+                lastActiveTimeMs: 0,
+                prevWorldDir: new THREE.Vector3(0, 0, -1)
+            },
+            {
+                index: 1,
+                controller: controller1,
+                laserLine: laserLine1,
+                laserMat: laserMat1,
+                handedness: 'left',
+                targetRayMode: 'tracked-pointer',
+                runtimeProfile: 'generic_xr',
+                pitchOffsetRad: 0,
+                triggerPressed: false,
+                triggerValue: 0,
+                squeezePressed: false,
+                squeezeValue: 0,
+                thumbstickClickPressed: false,
+                secondaryButtonPressed: false,
+                axesNorm: { primaryX: 0, primaryY: 0, thumbstickX: 0, thumbstickY: 0, touchpadX: 0, touchpadY: 0 },
+                lastSelectTimeMs: 0,
+                lastActiveTimeMs: 0,
+                prevWorldDir: new THREE.Vector3(0, 0, -1)
+            }
+        ];
+        let activeDominantSlotIdx = 0;
+        let lastGlobalXrSelectTimeMs = 0;
+
+        const executeUnifiedRaySelection = (
+            slot: UnifiedControllerSlotState | null,
+            inputSource?: XRInputSource | null,
+            xrFrame?: XRFrame,
+            directHandHitOverride?: THREE.Intersection | null
+        ) => {
+            if (!dnaGroupRef.current) return;
+            const nowMs = performance.now();
+            if (nowMs - lastGlobalXrSelectTimeMs < SELECT_DEBOUNCE_MS) return;
+            if (slot && nowMs - slot.lastSelectTimeMs < SELECT_DEBOUNCE_MS) return;
+
+            lastGlobalXrSelectTimeMs = nowMs;
+            if (slot) {
+                slot.lastSelectTimeMs = nowMs;
+                slot.lastActiveTimeMs = nowMs;
+                activeDominantSlotIdx = slot.index;
+                configureUnifiedRayFromController(slot, inputSource, xrFrame);
+            } else if (inputSource) {
+                // Transient-pointer (Apple Vision Pro eye+pinch) or Gaze session select
+                const activeCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+                vrRaycaster.setFromCamera(centerNdc, activeCam);
+            }
+
+            const hapticOpts = {
+                handedness: slot?.handedness === 'left' || slot?.handedness === 'right' ? slot.handedness : ('any' as const),
+                inputSource: inputSource || null,
+                runtimeProfile: slot?.runtimeProfile || 'generic_xr'
+            };
+
+            // 1. If a direct fingertip proximity hit on a DNA nucleotide was provided, select it immediately
+            if (directHandHitOverride && directHandHitOverride.object.userData?.type) {
+                triggerVrComponentSelect(directHandHitOverride.object);
+                triggerUniversalXrHaptics(xrSessionRef.current, 0.72, 45, hapticOpts);
+                return;
+            }
+
+            // 2. Check if user clicked the 3D Floating Holographic Card to toggle VR Game Mode inside headset
+            const cardHits = vrRaycaster.intersectObjects(vrInspectorCardGroup.children, false);
+            if (cardHits.length > 0 && onToggleVrGame) {
+                onToggleVrGame();
+                triggerUniversalXrHaptics(xrSessionRef.current, 0.75, 60, hapticOpts);
+                return;
+            }
+
+            // 3. Raycast against interactive DNA nucleotides with magnetic aim-assist
+            const activeMeshes = getActiveInteractiveDnaMeshes();
+            const hit = intersectDnaWithMagneticAssist(activeMeshes, renderer.xr.isPresenting);
+            if (hit) {
+                triggerVrComponentSelect(hit.object);
+                triggerUniversalXrHaptics(xrSessionRef.current, 0.68, 45, hapticOpts);
+            }
+        };
+
+        /**
+         * WebXR Hand Input API Per-Frame Processor:
+         * Extracts 25 articulated joint poses via `xrFrame.getJointPose(jointSpace, refSpace)`
+         * (with fallback to `renderer.xr.getHand(i).joints`), updates the 3D bio-holographic
+         * hand skeleton and pinch energy orb, and runs the Pinch-to-Select, Pinch-Drag-to-Rotate,
+         * and Fist-Grab gesture state machine.
+         */
+        const updateXrHandSlotFromFrame = (
+            slotIdx: number,
+            slot: UnifiedControllerSlotState,
+            src: XRInputSource | null,
+            xrFrame: XRFrame | undefined,
+            activeMeshes: THREE.Mesh[],
+            nowMs: number
+        ): {
+            isHandActive: boolean;
+            handHit: THREE.Intersection | null;
+            isDirectProximityHit: boolean;
+        } => {
+            const hs = handSlots[slotIdx];
+            const xrHand = src ? (src as any).hand : null;
+
+            if (!src || !xrHand) {
+                if (hs.isHandTracking) {
+                    hs.isHandTracking = false;
+                    hs.isPinching = false;
+                    hs.isDraggingHelix = false;
+                    hs.isFistGrabbing = false;
+                    hs.gesture = 'none';
+                    hs.visualRig.group.visible = false;
+                    hs.wandGroup.visible = true;
+                }
+                return { isHandActive: false, handHit: null, isDirectProximityHit: false };
+            }
+
+            hs.isHandTracking = true;
+            hs.wandGroup.visible = false;
+            slot.runtimeProfile = 'vision_pro_hand';
+            vrRigGroup.updateWorldMatrix(true, false);
+
+            const refSpace = renderer.xr.getReferenceSpace();
+            const getJointPoseFn = xrFrame && typeof (xrFrame as any).getJointPose === 'function'
+                ? (xrFrame as any).getJointPose.bind(xrFrame)
+                : null;
+            const threeHandJoints = (hs.xrHandSpace as any)?.joints || null;
+
+            let validJointCount = 0;
+
+            for (let j = 0; j < XR_HAND_JOINT_NAMES.length; j++) {
+                const jointName = XR_HAND_JOINT_NAMES[j];
+                let jointExtracted = false;
+                let jointRadius = j === 0 ? 0.014 : (j === 4 || j === 9 || j === 14 || j === 19 || j === 24) ? 0.0085 : 0.0075;
+
+                // 1. Primary W3C WebXR Hand Input API: xrFrame.getJointPose(jointSpace, refSpace)
+                if (getJointPoseFn && refSpace) {
+                    try {
+                        const jointSpace = typeof xrHand.get === 'function' ? xrHand.get(jointName) : xrHand[jointName];
+                        if (jointSpace) {
+                            const jPose = getJointPoseFn(jointSpace, refSpace);
+                            if (jPose && jPose.transform) {
+                                const p = jPose.transform.position;
+                                scratchJointLocalPos.set(p.x, p.y, p.z).applyMatrix4(vrRigGroup.matrixWorld);
+                                hs.jointWorldPositions[j].copy(scratchJointLocalPos);
+                                if (typeof jPose.radius === 'number' && jPose.radius > 0.002) {
+                                    jointRadius = jPose.radius * 1.12;
+                                }
+                                jointExtracted = true;
+                            }
+                        }
+                    } catch {
+                        // Fallback to Three.js hand joint object below
+                    }
+                }
+
+                // 2. Fallback to Three.js WebXRManager XRHandSpace.joints[jointName]
+                if (!jointExtracted && threeHandJoints && threeHandJoints[jointName]) {
+                    const tj = threeHandJoints[jointName] as THREE.Object3D & { jointRadius?: number };
+                    tj.updateWorldMatrix(true, false);
+                    tj.getWorldPosition(scratchJointLocalPos);
+                    if (scratchJointLocalPos.lengthSq() > 0.00001) {
+                        hs.jointWorldPositions[j].copy(scratchJointLocalPos);
+                        if (typeof tj.jointRadius === 'number' && tj.jointRadius > 0.002) {
+                            jointRadius = tj.jointRadius * 1.12;
+                        }
+                        jointExtracted = true;
+                    }
+                }
+
+                hs.jointValid[j] = jointExtracted;
+                const jMesh = hs.visualRig.jointMeshes[j];
+                if (jointExtracted) {
+                    validJointCount++;
+                    jMesh.visible = true;
+                    jMesh.position.copy(hs.jointWorldPositions[j]);
+                    jMesh.scale.setScalar(jointRadius);
+                } else {
+                    jMesh.visible = false;
+                }
+            }
+
+            if (validJointCount < 4) {
+                hs.visualRig.group.visible = false;
+                return { isHandActive: true, handHit: null, isDirectProximityHit: false };
+            }
+
+            hs.visualRig.group.visible = true;
+
+            // Update 24 articulated bone segments in-place (zero allocations)
+            const bonePosAttr = hs.visualRig.boneGeo.attributes.position as THREE.BufferAttribute;
+            for (let b = 0; b < XR_HAND_BONE_PAIRS.length; b++) {
+                const [idxA, idxB] = XR_HAND_BONE_PAIRS[b];
+                const posA = hs.jointWorldPositions[idxA];
+                const posB = hs.jointWorldPositions[idxB];
+                const bothValid = hs.jointValid[idxA] && hs.jointValid[idxB];
+                const vOffset = b * 2;
+                if (bothValid) {
+                    bonePosAttr.setXYZ(vOffset, posA.x, posA.y, posA.z);
+                    bonePosAttr.setXYZ(vOffset + 1, posB.x, posB.y, posB.z);
+                } else {
+                    bonePosAttr.setXYZ(vOffset, 0, 0, 0);
+                    bonePosAttr.setXYZ(vOffset + 1, 0, 0, 0);
+                }
+            }
+            bonePosAttr.needsUpdate = true;
+
+            const thumbTip = hs.jointWorldPositions[4];
+            const indexTip = hs.jointWorldPositions[9];
+            const wristPos = hs.jointWorldPositions[0];
+            const indexProximal = hs.jointWorldPositions[6];
+
+            // Compute Euclidean thumb-to-index pinch distance & normalized strength (0..1)
+            const pinchDistMeters = (hs.jointValid[4] && hs.jointValid[9])
+                ? thumbTip.distanceTo(indexTip)
+                : 0.065;
+            hs.pinchDistanceMm = Math.round(pinchDistMeters * 1000);
+            hs.pinchStrength = Number(
+                THREE.MathUtils.clamp((0.068 - pinchDistMeters) / (0.068 - 0.018), 0, 1).toFixed(2)
+            );
+            slot.triggerValue = hs.pinchStrength;
+
+            // Compute 3D Pinch Midpoint and update glowing bio-holographic Pinch Reticle Orb
+            hs.pinchMidpointWorld.addVectors(thumbTip, indexTip).multiplyScalar(0.5);
+            hs.visualRig.pinchOrbMesh.position.copy(hs.pinchMidpointWorld);
+            const orbScale = 0.65 + hs.pinchStrength * 0.95;
+            hs.visualRig.pinchOrbMesh.scale.setScalar(orbScale);
+            hs.visualRig.pinchRingMesh.lookAt(renderer.xr.getCamera().position);
+
+            // Determine Pinch active state with hysteresis
+            const rawPinchActive = hs.isPinching
+                ? pinchDistMeters < PINCH_RELEASE_METERS
+                : pinchDistMeters <= PINCH_ENGAGE_METERS;
+
+            // Check Direct Fingertip / Pinch-Midpoint Proximity to DNA Nucleotides
+            const directProximityHit = findDirectHandProximityDnaHit(
+                hs.pinchMidpointWorld,
+                activeMeshes,
+                0.115
+            );
+
+            // Configure precision hand ray (prefers WebXR targetRaySpace, falls back to wrist/index-proximal -> pinchMidpoint vector)
+            let hasHandRay = configureUnifiedRayFromController(slot, src, xrFrame);
+            if (!hasHandRay && hs.jointValid[6]) {
+                scratchHandAimDir.subVectors(hs.pinchMidpointWorld, indexProximal).normalize();
+                if (scratchHandAimDir.lengthSq() > 0.001) {
+                    vrRaycaster.set(hs.pinchMidpointWorld, scratchHandAimDir);
+                    hasHandRay = true;
+                }
+            }
+
+            let rayHit: THREE.Intersection | null = null;
+            if (directProximityHit) {
+                rayHit = directProximityHit;
+                slot.laserLine.visible = false;
+            } else if (hasHandRay) {
+                slot.laserLine.visible = true;
+                rayHit = intersectDnaWithMagneticAssist(activeMeshes, true);
+                const beamLen = rayHit ? Math.max(0.12, Math.min(rayHit.distance, 18)) : 12;
+                slot.laserLine.scale.set(1, 1, beamLen);
+                slot.laserMat.opacity = rayHit || hs.pinchStrength > 0.35 ? 0.96 : 0.55;
+            }
+
+            // ====================================================================
+            // GESTURE STATE MACHINE: PINCH-TO-SELECT vs PINCH-DRAG-TO-ROTATE
+            // ====================================================================
+            if (!hs.isPinching && rawPinchActive) {
+                // Pinch Onset
+                hs.isPinching = true;
+                hs.isDraggingHelix = false;
+                hs.isFistGrabbing = false;
+                hs.pinchStartTimeMs = nowMs;
+                hs.pinchStartWorld.copy(hs.pinchMidpointWorld);
+                if (dnaGroupRef.current) {
+                    hs.dragStartHelixRotY = dnaGroupRef.current.rotation.y;
+                    hs.dragStartHelixRotX = dnaGroupRef.current.rotation.x;
+                    hs.dragStartHelixPosY = dnaGroupRef.current.position.y;
+                }
+                hs.gesture = 'pinch_select';
+                slot.lastActiveTimeMs = nowMs;
+                activeDominantSlotIdx = slotIdx;
+                hs.visualRig.pinchOrbMat.color.setHex(0xfbbf24);
+                vrSound.playHoverTick();
+            } else if (hs.isPinching && rawPinchActive) {
+                // Pinch Held: check movement delta from pinch onset
+                scratchHandDragDelta.subVectors(hs.pinchMidpointWorld, hs.pinchStartWorld);
+                const dragDistMeters = scratchHandDragDelta.length();
+
+                if (dragDistMeters > PINCH_DRAG_DEADZONE_METERS || hs.isDraggingHelix) {
+                    hs.isDraggingHelix = true;
+                    hs.gesture = bimanualPinchActive ? 'bimanual_scale' : 'pinch_drag';
+                    hs.visualRig.pinchOrbMat.color.setHex(0x34d399);
+
+                    // Single-hand Pinch-Drag-to-Rotate & Elevate (when not in bimanual two-hand scale mode)
+                    if (!bimanualPinchActive && dnaGroupRef.current) {
+                        dnaGroupRef.current.rotation.y = hs.dragStartHelixRotY + scratchHandDragDelta.x * 4.85;
+                        dnaGroupRef.current.rotation.x = THREE.MathUtils.clamp(
+                            hs.dragStartHelixRotX + scratchHandDragDelta.z * 1.45,
+                            -0.65,
+                            0.65
+                        );
+                        dnaGroupRef.current.position.y = THREE.MathUtils.clamp(
+                            hs.dragStartHelixPosY + scratchHandDragDelta.y * 1.55,
+                            0.35,
+                            3.1
+                        );
+                    }
+                } else {
+                    hs.gesture = 'pinch_select';
+                    hs.visualRig.pinchOrbMat.color.setHex(0xfbbf24);
+                }
+            } else if (hs.isPinching && !rawPinchActive) {
+                // Pinch Released: if the user did NOT drag to rotate, execute Pinch-to-Select!
+                if (!hs.isDraggingHelix) {
+                    executeUnifiedRaySelection(slot, src, xrFrame, directProximityHit);
+                }
+                hs.isPinching = false;
+                hs.isDraggingHelix = false;
+                hs.gesture = 'open';
+                hs.visualRig.pinchOrbMat.color.setHex(slotIdx === 0 ? 0x38bdf8 : 0x34d399);
+            } else {
+                // Not pinching: evaluate Whole-Hand Fist Curl Grab ('fist_grab') or Point/Open posture
+                hs.visualRig.pinchOrbMat.color.setHex(slotIdx === 0 ? 0x38bdf8 : 0x34d399);
+                if (hs.jointValid[0] && hs.jointValid[9] && hs.jointValid[14] && hs.jointValid[19] && hs.jointValid[24]) {
+                    const dIndex = hs.jointWorldPositions[9].distanceTo(wristPos);
+                    const dMiddle = hs.jointWorldPositions[14].distanceTo(wristPos);
+                    const dRing = hs.jointWorldPositions[19].distanceTo(wristPos);
+                    const dPinky = hs.jointWorldPositions[24].distanceTo(wristPos);
+                    const avgCurlDist = (dIndex + dMiddle + dRing + dPinky) * 0.25;
+
+                    const fistActive = hs.isFistGrabbing
+                        ? avgCurlDist < FIST_RELEASE_METERS
+                        : avgCurlDist <= FIST_ENGAGE_METERS;
+
+                    if (!hs.isFistGrabbing && fistActive && dnaGroupRef.current) {
+                        hs.isFistGrabbing = true;
+                        hs.fistStartWorld.copy(wristPos);
+                        hs.dragStartHelixRotY = dnaGroupRef.current.rotation.y;
+                        hs.dragStartHelixPosY = dnaGroupRef.current.position.y;
+                        hs.gesture = 'fist_grab';
+                        slot.lastActiveTimeMs = nowMs;
+                        activeDominantSlotIdx = slotIdx;
+                        vrSound.playHoverTick();
+                    } else if (hs.isFistGrabbing && fistActive && dnaGroupRef.current) {
+                        hs.gesture = 'fist_grab';
+                        const dx = wristPos.x - hs.fistStartWorld.x;
+                        const dy = wristPos.y - hs.fistStartWorld.y;
+                        dnaGroupRef.current.rotation.y = hs.dragStartHelixRotY + dx * 4.5;
+                        dnaGroupRef.current.position.y = THREE.MathUtils.clamp(
+                            hs.dragStartHelixPosY + dy * 1.5,
+                            0.35,
+                            3.1
+                        );
+                    } else {
+                        hs.isFistGrabbing = false;
+                        // Check if index finger is extended while middle/ring/pinky are curled ('point')
+                        const isPointing = dIndex > 0.125 && (dMiddle + dRing + dPinky) / 3 < 0.105;
+                        hs.gesture = isPointing ? 'point' : 'open';
+                    }
+                } else {
+                    hs.gesture = 'open';
+                }
+            }
+
+            return {
+                isHandActive: true,
+                handHit: rayHit,
+                isDirectProximityHit: Boolean(directProximityHit)
+            };
+        };
+
+        controller0.addEventListener('selectstart', () => {
+            controllerSlots[0].triggerPressed = true;
+            controllerSlots[0].triggerValue = 1.0;
+            // When articulated hand tracking is active on slot 0, pinch-to-select vs drag disambiguation handles selection on release
+            if (!handSlots[0].isHandTracking) {
+                executeUnifiedRaySelection(controllerSlots[0]);
+            }
+        });
+        controller0.addEventListener('selectend', () => {
+            controllerSlots[0].triggerPressed = false;
+            controllerSlots[0].triggerValue = 0;
+        });
+        controller1.addEventListener('selectstart', () => {
+            controllerSlots[1].triggerPressed = true;
+            controllerSlots[1].triggerValue = 1.0;
+            if (!handSlots[1].isHandTracking) {
+                executeUnifiedRaySelection(controllerSlots[1]);
+            }
+        });
+        controller1.addEventListener('selectend', () => {
+            controllerSlots[1].triggerPressed = false;
+            controllerSlots[1].triggerValue = 0;
+        });
+
+        // 6-DoF Squeeze / Grip Manipulation (Grab & Rotate DNA Helix directly in VR)
+        let grabbedController: THREE.Object3D | null = null;
+        const grabStartCtrlPos = new THREE.Vector3();
+        let grabStartHelixRotY = 0;
+        let grabStartHelixPosY = 1.45;
+
+        const onSqueezeStart = (ctrl: THREE.Object3D, slotIdx: number, inputSource?: XRInputSource | null) => {
+            if (!dnaGroupRef.current) return;
+            const slot = controllerSlots[slotIdx];
+            slot.squeezePressed = true;
+            slot.lastActiveTimeMs = performance.now();
+            activeDominantSlotIdx = slotIdx;
+            grabbedController = ctrl;
+            ctrl.getWorldPosition(grabStartCtrlPos);
+            grabStartHelixRotY = dnaGroupRef.current.rotation.y;
+            grabStartHelixPosY = dnaGroupRef.current.position.y;
+            triggerUniversalXrHaptics(xrSessionRef.current, 0.52, 35, {
+                handedness: slot.handedness === 'left' || slot.handedness === 'right' ? slot.handedness : 'any',
+                inputSource: inputSource || null,
+                runtimeProfile: slot.runtimeProfile
+            });
+        };
+        const onSqueezeEnd = (ctrl: THREE.Object3D, slotIdx: number) => {
+            controllerSlots[slotIdx].squeezePressed = false;
+            if (grabbedController === ctrl) {
+                grabbedController = null;
+            }
+        };
+
+        controller0.addEventListener('squeezestart', () => onSqueezeStart(controller0, 0));
+        controller0.addEventListener('squeezeend', () => onSqueezeEnd(controller0, 0));
+        controller1.addEventListener('squeezestart', () => onSqueezeStart(controller1, 1));
+        controller1.addEventListener('squeezeend', () => onSqueezeEnd(controller1, 1));
+
+        vrRigGroup.add(controller0);
+        vrRigGroup.add(controller1);
+
+        // Session-level inputSource listener for transient-pointer (Vision Pro / Hand Pinch) & hot-swapped controllers
+        const onSessionSelectStart = (event: XRInputSourceEvent) => {
+            const src = event.inputSource;
+            const session = renderer.xr.getSession();
+            if (!session) return;
+            const idx = Array.from(session.inputSources).indexOf(src);
+            const matchedSlot = idx === 0 || idx === 1 ? controllerSlots[idx] : null;
+            if (matchedSlot) {
+                const { profile, pitchOffsetRad } = detectXrRuntimeProfile(src);
+                matchedSlot.runtimeProfile = profile;
+                matchedSlot.pitchOffsetRad = pitchOffsetRad;
+                matchedSlot.handedness = src.handedness || matchedSlot.handedness;
+                matchedSlot.targetRayMode = src.targetRayMode || 'tracked-pointer';
+            }
+            // If articulated 25-joint hand tracking is active on this slot, let the pinch/drag state machine disambiguate tap vs drag
+            if (idx === 0 || idx === 1) {
+                if (handSlots[idx].isHandTracking || Boolean((src as any).hand)) {
+                    return;
+                }
+            }
+            executeUnifiedRaySelection(matchedSlot, src, event.frame);
+        };
+
+        // WebXR Session Start & End Handlers (adapts DNA scale, position & hardware depth clip planes for VR headsets)
         const onXrSessionStart = () => {
+            const session = renderer.xr.getSession();
+            if (session) {
+                xrSessionRef.current = session;
+                session.addEventListener('selectstart', onSessionSelectStart);
+            }
+            synchronizeXrDepthAndCameraPlanes(true, session);
+            vrRigGroup.position.set(0, 0, 0);
+            vrRigGroup.rotation.set(0, 0, 0);
             if (dnaGroupRef.current) {
                 dnaGroupRef.current.position.set(0, 1.45, -2.5);
                 dnaGroupRef.current.scale.setScalar(0.085);
@@ -1538,7 +3224,28 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         };
 
         const onXrSessionEnd = () => {
+            if (xrSessionRef.current) {
+                try {
+                    xrSessionRef.current.removeEventListener('selectstart', onSessionSelectStart);
+                } catch {
+                    // Ignore if session already closed
+                }
+            }
             xrSessionRef.current = null;
+            grabbedController = null;
+            bimanualPinchActive = false;
+            for (let i = 0; i < handSlots.length; i++) {
+                handSlots[i].isHandTracking = false;
+                handSlots[i].isPinching = false;
+                handSlots[i].isDraggingHelix = false;
+                handSlots[i].isFistGrabbing = false;
+                handSlots[i].gesture = 'none';
+                handSlots[i].visualRig.group.visible = false;
+                handSlots[i].wandGroup.visible = true;
+            }
+            synchronizeXrDepthAndCameraPlanes(false);
+            vrRigGroup.position.set(0, 0, 0);
+            vrRigGroup.rotation.set(0, 0, 0);
             if (dnaGroupRef.current) {
                 dnaGroupRef.current.position.set(0, 0, 0);
                 dnaGroupRef.current.scale.set(1, 1, 1);
@@ -1554,6 +3261,34 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
         renderer.xr.addEventListener('sessionstart', onXrSessionStart);
         renderer.xr.addEventListener('sessionend', onXrSessionEnd);
+
+        // Mobile Gyroscope 3-DoF Head-Tracking Listener for Stereo 360° Cardboard Headsets
+        let lastGyroAlpha: number | null = null;
+        let lastGyroBeta: number | null = null;
+        const handleDeviceOrientation = (e: DeviceOrientationEvent) => {
+            if (!stateRef.current.isVrModeActive || renderer.xr.isPresenting || activePointers.size > 0) {
+                lastGyroAlpha = null;
+                lastGyroBeta = null;
+                return;
+            }
+            if (typeof e.alpha === 'number' && typeof e.beta === 'number') {
+                if (lastGyroAlpha !== null && lastGyroBeta !== null) {
+                    let dAlpha = e.alpha - lastGyroAlpha;
+                    if (dAlpha > 180) dAlpha -= 360;
+                    if (dAlpha < -180) dAlpha += 360;
+                    const dBeta = e.beta - lastGyroBeta;
+                    if (Math.abs(dAlpha) < 25 && Math.abs(dBeta) < 25) {
+                        customCam.applyRotateDelta(
+                            THREE.MathUtils.degToRad(dAlpha * 0.55),
+                            THREE.MathUtils.degToRad(dBeta * 0.45)
+                        );
+                    }
+                }
+                lastGyroAlpha = e.alpha;
+                lastGyroBeta = e.beta;
+            }
+        };
+        window.addEventListener('deviceorientation', handleDeviceOrientation, { passive: true });
 
         // Custom Pointer, Touch, Wheel & Keyboard Interaction for Independent Pan & Rotate
         const domEl = renderer.domElement;
@@ -1589,7 +3324,6 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             }
 
             if (activePointers.size === 1) {
-                // Determine independent mode: Right/Middle click or Shift = Pan; Ctrl/Alt = Rotate; otherwise active cameraControlMode
                 if (e.button === 2 || e.button === 1 || e.shiftKey) {
                     activeDragMode = 'pan';
                 } else if (e.ctrlKey || e.altKey || e.metaKey) {
@@ -1616,7 +3350,6 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 const dy = e.clientY - prev.y;
                 activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-                // Allow dynamic Shift modifier mid-drag
                 const effectiveMode: 'rotate' | 'pan' = e.shiftKey
                     ? 'pan'
                     : (e.ctrlKey || e.altKey || e.metaKey)
@@ -1636,12 +3369,10 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 const newMidX = (pts[0].x + pts[1].x) * 0.5;
                 const newMidY = (pts[0].y + pts[1].y) * 0.5;
 
-                // Two-finger independent pan
                 const dMidX = newMidX - prevMidX;
                 const dMidY = newMidY - prevMidY;
                 customCam.applyScreenPanDelta(dMidX, dMidY, domEl.clientHeight || window.innerHeight);
 
-                // Two-finger independent pinch zoom
                 if (prevPinchDist > 8 && newDist > 8) {
                     const zoomScale = prevPinchDist / newDist;
                     customCam.applyZoomScale(THREE.MathUtils.clamp(zoomScale, 0.85, 1.18));
@@ -1677,14 +3408,36 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             customCam.applyZoomScale(zoomFactor);
         };
 
+        // Universal Keyboard Controls (Arrows + WASD + QE + Space/Enter for VR Game CRISPR Repair)
+        const pressedKeys = new Set<string>();
         const handleKeyDown = (e: KeyboardEvent) => {
             const activeTag = document.activeElement?.tagName.toLowerCase();
             if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') return;
 
+            pressedKeys.add(e.code);
             const isPanKey = e.shiftKey || stateRef.current.cameraControlMode === 'pan';
             const vh = domEl.clientHeight || window.innerHeight;
             const panStepPx = 28;
             const rotStepRad = THREE.MathUtils.degToRad(8);
+
+            // Spacebar or Enter repairs the current CRISPR target or selects hovered nucleotide
+            if ((e.code === 'Space' || e.code === 'Enter') && (stateRef.current.isVrGameActive || stateRef.current.isVrModeActive)) {
+                e.preventDefault();
+                const g = vrGameStateRef.current;
+                const targetPairContainer = pairDynamicContainersRef.current[g.targetPairIndex];
+                if (g.active && targetPairContainer) {
+                    let meshFound: THREE.Object3D | null = null;
+                    targetPairContainer.traverse(ch => {
+                        if (!meshFound && (ch as THREE.Mesh).isMesh && ch.userData?.type) {
+                            meshFound = ch;
+                        }
+                    });
+                    if (meshFound) {
+                        triggerVrComponentSelect(meshFound);
+                        return;
+                    }
+                }
+            }
 
             switch (e.key) {
                 case 'ArrowUp':
@@ -1720,6 +3473,10 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             }
         };
 
+        const handleKeyUp = (e: KeyboardEvent) => {
+            pressedKeys.delete(e.code);
+        };
+
         domEl.addEventListener('contextmenu', handleContextMenu);
         domEl.addEventListener('pointerdown', handlePointerDown);
         domEl.addEventListener('pointermove', handlePointerMove);
@@ -1727,6 +3484,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         domEl.addEventListener('pointercancel', handlePointerUpOrCancel);
         domEl.addEventListener('wheel', handleWheel, { passive: false });
         window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
 
         // WebXR-Compatible Render Loop via setAnimationLoop
         let thermalPhase = 0;
@@ -1734,14 +3492,33 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         let smoothedFrameIntervalMs = 11.1;
         let smoothedGpuPipelineMs = 3.2;
         let lastTelemetryEmitTime = 0;
+        let lastGameUiSyncTime = 0;
+        let smoothedDofFocusDist = 46.0;
+        let smoothedDofMaxBlur = 0.0022;
+        let smoothedDofAperture = stateRef.current.dofAperture;
 
-        const render = (now: number) => {
+        // VR Gaze-Dwell, Snap-Turn & Gamepad Button Debounce State
+        let dwellHoveredType: string | null = null;
+        let dwellElapsedMs = 0;
+        let dwellTriggered = false;
+        let lastPointerEmitTime = 0;
+        let lastCardRedrawTime = 0;
+        let snapTurnCooldownMs = 0;
+        let prevGamepadTriggerPressed = false;
+        const centerNdc = new THREE.Vector2(0, 0);
+        const tempWorldPos = new THREE.Vector3();
+
+        const render = (now: number, xrFrame?: XRFrame) => {
             const frameStartPerf = performance.now();
             const rawDeltaMs = now - prevFrameTimestamp;
             prevFrameTimestamp = now;
+            const dt = Math.min(Math.max(rawDeltaMs, 1) / 1000, 0.05);
 
             if (rawDeltaMs > 1 && rawDeltaMs < 200) {
                 smoothedFrameIntervalMs = smoothedFrameIntervalMs * 0.88 + rawDeltaMs * 0.12;
+            }
+            if (snapTurnCooldownMs > 0) {
+                snapTurnCooldownMs = Math.max(0, snapTurnCooldownMs - Math.min(rawDeltaMs, 50));
             }
 
             // Update tweens
@@ -1749,6 +3526,44 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 if (activeTweensRef.current[i].update(now)) {
                     activeTweensRef.current.splice(i, 1);
                 }
+            }
+
+            // Update Interactive VR CRISPR Game Timer & 3D Target Beacon Position
+            if (vrGameStateRef.current.active) {
+                const g = vrGameStateRef.current;
+                g.timeRemainingSec = Math.max(0, g.timeRemainingSec - dt);
+                if (g.timeRemainingSec <= 0) {
+                    // Auto-cycle new round while keeping high score excitement
+                    g.timeRemainingSec = 60;
+                    g.combo = 1;
+                    g.lastEventLabel = `Babak Baru Dimulai! Skor Terakhir: ${g.score} Poin`;
+                    vrSound.playGameStateChange(false);
+                    pickNextVrGameTarget(g.targetPairIndex);
+                }
+
+                const targetPairObj = pairDynamicContainersRef.current[g.targetPairIndex];
+                if (targetPairObj && dnaGroupRef.current) {
+                    dnaGroupRef.current.updateMatrixWorld(true);
+                    targetPairObj.getWorldPosition(tempWorldPos);
+                    vrGameBeaconGroup.visible = true;
+                    vrGameBeaconGroup.position.copy(tempWorldPos);
+                    const scaleFactor = renderer.xr.isPresenting ? 0.11 : 1.0;
+                    const pulse = 1.0 + Math.sin(now * 0.008) * 0.18;
+                    vrGameBeaconGroup.scale.setScalar(scaleFactor * pulse);
+                    beaconCrystal.rotation.y += dt * 2.4;
+                    beaconCrystal.rotation.x += dt * 1.6;
+                    beaconOuterRing.lookAt(renderer.xr.isPresenting ? renderer.xr.getCamera().position : camera.position);
+                } else {
+                    vrGameBeaconGroup.visible = false;
+                }
+
+                if (now - lastGameUiSyncTime > 240) {
+                    lastGameUiSyncTime = now;
+                    emitVrGameTelemetryNow();
+                    drawFloatingVrInspectorCard(stateRef.current.selectedComponentKey, dwellHoveredType, 0);
+                }
+            } else {
+                vrGameBeaconGroup.visible = false;
             }
 
             // 37°C Thermal Brownian Dynamics & Quantum H-Bond Emissive Shimmer
@@ -1780,11 +3595,82 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             bloomPass.strength = stateRef.current.bloomStrength + bloomPulseBoostRef.current;
             bloomPass.threshold = stateRef.current.bloomThreshold;
 
-            // Auto Rotation
-            if (stateRef.current.autoRotate && dnaGroupRef.current) {
+            // Auto Rotation (pauses automatically during controller squeeze grab or WebXR hand pinch-drag / fist-grab)
+            const isHandManipulatingHelix =
+                bimanualPinchActive ||
+                handSlots[0].isDraggingHelix ||
+                handSlots[1].isDraggingHelix ||
+                handSlots[0].isFistGrabbing ||
+                handSlots[1].isFistGrabbing;
+            if (stateRef.current.autoRotate && dnaGroupRef.current && !grabbedController && !isHandManipulatingHelix) {
                 dnaGroupRef.current.rotation.y += 0.0035;
                 if (focusedTargetRef.current && customCamRef.current && activePointers.size === 0) {
                     customCamRef.current.sphericalTarget.theta += 0.0035;
+                }
+            }
+
+            // Continuous WASD / QE Keyboard Locomotion (smooth frame-rate independent)
+            if (pressedKeys.size > 0 && customCamRef.current) {
+                const rotSpd = 1.65 * dt;
+                const panSpd = 420 * dt;
+                const vh = domEl.clientHeight || window.innerHeight;
+                if (pressedKeys.has('KeyA')) customCamRef.current.applyRotateDelta(rotSpd, 0);
+                if (pressedKeys.has('KeyD')) customCamRef.current.applyRotateDelta(-rotSpd, 0);
+                if (pressedKeys.has('KeyW')) customCamRef.current.applyRotateDelta(0, rotSpd * 0.8);
+                if (pressedKeys.has('KeyS')) customCamRef.current.applyRotateDelta(0, -rotSpd * 0.8);
+                if (pressedKeys.has('KeyQ')) customCamRef.current.applyScreenPanDelta(0, panSpd, vh);
+                if (pressedKeys.has('KeyE')) customCamRef.current.applyScreenPanDelta(0, -panSpd, vh);
+            }
+
+            // Universal HTML5 Gamepad Polling (Xbox, PlayStation, PC VR Gamepad, Bluetooth VR Remote)
+            let activeGamepadCount = 0;
+            if (!renderer.xr.isPresenting && typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function') {
+                try {
+                    const pads = navigator.getGamepads();
+                    for (const pad of pads) {
+                        if (!pad || !pad.connected) continue;
+                        activeGamepadCount++;
+                        const lx = pad.axes[0] || 0;
+                        const ly = pad.axes[1] || 0;
+                        const rx = pad.axes[2] || 0;
+                        const ry = pad.axes[3] || 0;
+
+                        if (customCamRef.current) {
+                            if (Math.abs(lx) > 0.14 || Math.abs(ly) > 0.14) {
+                                customCamRef.current.applyRotateDelta(-lx * 2.1 * dt, -ly * 1.6 * dt);
+                            }
+                            if (Math.abs(rx) > 0.16) {
+                                if (stateRef.current.vrLocomotionMode === 'snap') {
+                                    if (snapTurnCooldownMs <= 0 && Math.abs(rx) > 0.6) {
+                                        customCamRef.current.applyRotateDelta(-Math.sign(rx) * THREE.MathUtils.degToRad(30), 0);
+                                        snapTurnCooldownMs = 280;
+                                    }
+                                } else {
+                                    customCamRef.current.applyRotateDelta(-rx * 2.2 * dt, 0);
+                                }
+                            }
+                            if (Math.abs(ry) > 0.16) {
+                                customCamRef.current.applyScreenPanDelta(0, -ry * 520 * dt, domEl.clientHeight || window.innerHeight);
+                            }
+                        }
+
+                        const triggerPressed = Boolean(
+                            pad.buttons[0]?.pressed || pad.buttons[7]?.pressed || pad.buttons[5]?.pressed
+                        );
+                        if (triggerPressed && !prevGamepadTriggerPressed) {
+                            prevGamepadTriggerPressed = true;
+                            vrRaycaster.setFromCamera(centerNdc, camera);
+                            const gHits = vrRaycaster.intersectObjects(getActiveInteractiveDnaMeshes(), false);
+                            if (gHits.length > 0) {
+                                triggerVrComponentSelect(gHits[0].object);
+                            }
+                        } else if (!triggerPressed) {
+                            prevGamepadTriggerPressed = false;
+                        }
+                        break;
+                    }
+                } catch {
+                    // Ignore Gamepad API restrictions
                 }
             }
 
@@ -1803,7 +3689,6 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     smoothedGpuPipelineMs = smoothedGpuPipelineMs * 0.85 + frameExecMs * 0.15;
                     if (now - lastTelemetryEmitTime > 480) {
                         lastTelemetryEmitTime = now;
-                        // Motion-to-photon latency combines vsync interval half-period + render pipeline execution
                         const latencyMs = Number(
                             THREE.MathUtils.clamp(smoothedFrameIntervalMs * 0.55 + smoothedGpuPipelineMs + 2.4, 6.2, 48.0).toFixed(1)
                         );
@@ -1813,27 +3698,392 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 }
             };
 
-            // Poll WebXR Headset Controller Thumbsticks when presenting in VR
-            if (renderer.xr.isPresenting && dnaGroupRef.current) {
-                const session = renderer.xr.getSession();
-                if (session && session.inputSources) {
-                    for (const source of session.inputSources) {
-                        if (source.gamepad && source.gamepad.axes.length >= 4) {
-                            const thumbX = source.gamepad.axes[2] || 0;
-                            const thumbY = source.gamepad.axes[3] || 0;
-                            if (Math.abs(thumbX) > 0.12) {
-                                dnaGroupRef.current.rotation.y -= thumbX * 0.035;
+            // Update Unified Multi-Headset XR Raycaster, WebXR Hand Input API, Gaze-Dwell Selection & 3D Floating Inspector Card
+            if ((stateRef.current.isVrModeActive || stateRef.current.isVrGameActive || renderer.xr.isPresenting) && dnaGroupRef.current) {
+                let hitResult: THREE.Intersection | null = null;
+                let pointerMode: 'controller_ray' | 'gaze_dwell' | 'gamepad_ray' | 'hand_pinch' | 'hand_direct' =
+                    activeGamepadCount > 0 ? 'gamepad_ray' : 'gaze_dwell';
+                const activeMeshes = getActiveInteractiveDnaMeshes();
+                let xrCtrlCount = 0;
+                let activeHandReport: 'left' | 'right' | 'none' = 'none';
+                let activeRuntimeReport: XrRuntimeProfile = activeGamepadCount > 0 ? 'gamepad' : 'gaze';
+                let activeTriggerPressure = 0;
+                let activeTargetRayMode: 'tracked-pointer' | 'gaze' | 'screen' | 'transient-pointer' = 'gaze';
+                let activeIsHandTracking = false;
+                let activeHandGesture: XrHandGestureState = 'none';
+                let activePinchStrength = 0;
+                let activePinchDistanceMm = 65;
+
+                // 1. Unified Multi-Headset 6-DoF WebXR Controller & WebXR Hand Input API Polling
+                if (renderer.xr.isPresenting) {
+                    const session = renderer.xr.getSession();
+                    const inputSources = session?.inputSources ? Array.from(session.inputSources) : [];
+                    xrCtrlCount = inputSources.length || 2;
+
+                    const slotHits: (THREE.Intersection | null)[] = [null, null];
+                    const slotIsDirectHand: boolean[] = [false, false];
+
+                    for (let i = 0; i < controllerSlots.length; i++) {
+                        const slot = controllerSlots[i];
+                        const src = inputSources[i] || null;
+
+                        if (src) {
+                            const { profile, pitchOffsetRad } = detectXrRuntimeProfile(src);
+                            slot.runtimeProfile = profile;
+                            slot.pitchOffsetRad = pitchOffsetRad;
+                            slot.handedness = src.handedness || (i === 0 ? 'right' : 'left');
+                            slot.targetRayMode = src.targetRayMode || 'tracked-pointer';
+                        }
+
+                        // A. Check if this XRInputSource exposes an articulated WebXR Hand (`inputSource.hand`)
+                        const handUpdate = updateXrHandSlotFromFrame(i, slot, src, xrFrame, activeMeshes, now);
+                        if (handUpdate.isHandActive) {
+                            slotHits[i] = handUpdate.handHit;
+                            slotIsDirectHand[i] = handUpdate.isDirectProximityHit;
+                            continue;
+                        }
+
+                        // B. Standard 6-DoF Controller / Gamepad / Transient-Pointer InputSource Processing
+                        slot.laserLine.visible = true;
+                        if (src) {
+                            const {
+                                effectiveTriggerVal,
+                                effectiveSqueezeVal,
+                                thumbstickClickedEdge,
+                                secondaryButtonEdge
+                            } = normalizeXrInputSourceState(slot, src);
+
+                            slot.triggerValue = effectiveTriggerVal;
+                            slot.squeezeValue = effectiveSqueezeVal;
+
+                            // Primary Trigger / Touchpad Click / A-X Face Button Selection with Hysteresis
+                            if (!slot.triggerPressed && effectiveTriggerVal >= TRIGGER_PRESS_THRESHOLD) {
+                                slot.triggerPressed = true;
+                                slot.lastActiveTimeMs = now;
+                                activeDominantSlotIdx = i;
+                                executeUnifiedRaySelection(slot, src, xrFrame);
+                            } else if (slot.triggerPressed && effectiveTriggerVal < TRIGGER_RELEASE_THRESHOLD) {
+                                slot.triggerPressed = false;
                             }
-                            if (Math.abs(thumbY) > 0.12) {
-                                dnaGroupRef.current.position.y = THREE.MathUtils.clamp(
-                                    dnaGroupRef.current.position.y - thumbY * 0.025,
-                                    0.4,
-                                    2.8
-                                );
+
+                            // Squeeze / Grip Button (buttons[1]) for 6-DoF Helix Manipulation
+                            if (!slot.squeezePressed && effectiveSqueezeVal >= SQUEEZE_PRESS_THRESHOLD) {
+                                onSqueezeStart(slot.controller, i, src);
+                            } else if (slot.squeezePressed && effectiveSqueezeVal < SQUEEZE_RELEASE_THRESHOLD) {
+                                onSqueezeEnd(slot.controller, i);
                             }
+
+                            // Thumbstick Click L3 / R3 (buttons[3]): Recenter VR Rig & Reset DNA Helix Pose
+                            if (thumbstickClickedEdge && dnaGroupRef.current) {
+                                vrRigGroup.position.set(0, 0, 0);
+                                dnaGroupRef.current.position.set(0, 1.45, -2.5);
+                                dnaGroupRef.current.rotation.y = 0;
+                                dnaGroupRef.current.scale.setScalar(0.085);
+                                triggerUniversalXrHaptics(session, 0.55, 45, {
+                                    handedness: slot.handedness === 'left' || slot.handedness === 'right' ? slot.handedness : 'any',
+                                    inputSource: src,
+                                    runtimeProfile: slot.runtimeProfile
+                                });
+                            }
+
+                            // Secondary Face Button B / Y / Menu (buttons[5]): Toggle VR CRISPR Repair Game directly
+                            if (secondaryButtonEdge && onToggleVrGame) {
+                                onToggleVrGame();
+                                triggerUniversalXrHaptics(session, 0.65, 50, {
+                                    handedness: slot.handedness === 'left' || slot.handedness === 'right' ? slot.handedness : 'any',
+                                    inputSource: src,
+                                    runtimeProfile: slot.runtimeProfile
+                                });
+                            }
+                        }
+
+                        const hasPose = configureUnifiedRayFromController(slot, src, xrFrame);
+                        if (hasPose) {
+                            const cHit = intersectDnaWithMagneticAssist(activeMeshes, true);
+                            slotHits[i] = cHit;
+                            const beamLen = cHit ? Math.max(0.15, Math.min(cHit.distance, 18)) : 14;
+                            slot.laserLine.scale.set(1, 1, beamLen);
+                            slot.laserMat.opacity = cHit || slot.triggerValue > 0.2 ? 0.98 : 0.65;
+                        }
+                    }
+
+                    // Bimanual Two-Hand Pinch Manipulation (simultaneous left + right hand pinch scales & twists DNA helix)
+                    if (
+                        handSlots[0].isHandTracking &&
+                        handSlots[1].isHandTracking &&
+                        handSlots[0].isPinching &&
+                        handSlots[1].isPinching &&
+                        dnaGroupRef.current
+                    ) {
+                        const p0 = handSlots[0].pinchMidpointWorld;
+                        const p1 = handSlots[1].pinchMidpointWorld;
+                        const currSpan = Math.max(0.04, p0.distanceTo(p1));
+                        const currAzimuth = Math.atan2(p1.z - p0.z, p1.x - p0.x);
+
+                        if (!bimanualPinchActive) {
+                            bimanualPinchActive = true;
+                            bimanualStartDist = currSpan;
+                            bimanualStartScale = dnaGroupRef.current.scale.x;
+                            bimanualStartAngle = currAzimuth;
+                            bimanualStartRotY = dnaGroupRef.current.rotation.y;
+                            handSlots[0].isDraggingHelix = true;
+                            handSlots[1].isDraggingHelix = true;
+                            vrSound.playHoverTick();
+                        } else {
+                            const scaleRatio = currSpan / Math.max(0.04, bimanualStartDist);
+                            const nextScale = THREE.MathUtils.clamp(bimanualStartScale * scaleRatio, 0.045, 0.22);
+                            dnaGroupRef.current.scale.setScalar(nextScale);
+
+                            let deltaAngle = currAzimuth - bimanualStartAngle;
+                            if (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
+                            if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
+                            dnaGroupRef.current.rotation.y = bimanualStartRotY - deltaAngle * 1.35;
+                        }
+                        handSlots[0].gesture = 'bimanual_scale';
+                        handSlots[1].gesture = 'bimanual_scale';
+                    } else {
+                        bimanualPinchActive = false;
+                    }
+
+                    // Arbitrate between dual hand controllers/hands: prefer active dominant hand if it hits, else the other hand
+                    const primaryIdx = activeDominantSlotIdx;
+                    const secondaryIdx = primaryIdx === 0 ? 1 : 0;
+                    const chosenIdx = slotHits[primaryIdx]
+                        ? primaryIdx
+                        : slotHits[secondaryIdx]
+                            ? secondaryIdx
+                            : primaryIdx;
+
+                    const chosenSlot = controllerSlots[chosenIdx];
+                    const chosenHand = handSlots[chosenIdx];
+                    activeHandReport = chosenSlot.handedness;
+                    activeRuntimeReport = chosenSlot.runtimeProfile;
+                    activeTriggerPressure = Number(chosenSlot.triggerValue.toFixed(2));
+                    activeTargetRayMode = chosenSlot.targetRayMode;
+                    activeIsHandTracking = chosenHand.isHandTracking;
+                    activeHandGesture = chosenHand.gesture;
+                    activePinchStrength = chosenHand.pinchStrength;
+                    activePinchDistanceMm = chosenHand.pinchDistanceMm;
+
+                    if (slotHits[chosenIdx]) {
+                        hitResult = slotHits[chosenIdx];
+                        pointerMode = chosenHand.isHandTracking
+                            ? slotIsDirectHand[chosenIdx]
+                                ? 'hand_direct'
+                                : 'hand_pinch'
+                            : 'controller_ray';
+                    } else if (chosenHand.isHandTracking) {
+                        pointerMode = 'hand_pinch';
+                    }
+                }
+
+                // 2. Fallback to Center Gaze Raycasting (works in Headset Gaze/VisionPro, 360° Stereoscopic VR, and Gamepad modes)
+                if (!hitResult && activePointers.size === 0) {
+                    const activeCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+                    vrRaycaster.setFromCamera(centerNdc, activeCam);
+                    const gHit = intersectDnaWithMagneticAssist(activeMeshes, renderer.xr.isPresenting);
+                    if (gHit) {
+                        hitResult = gHit;
+                        if (!activeIsHandTracking) {
+                            pointerMode = activeGamepadCount > 0 ? 'gamepad_ray' : 'gaze_dwell';
                         }
                     }
                 }
+
+                const dwellTargetDurationMs = vrGameStateRef.current.active ? 820 : 1150;
+
+                if (hitResult && hitResult.object.userData?.type) {
+                    const hType = hitResult.object.userData.type as string;
+                    vrHitMarker.visible = true;
+                    vrHitMarker.position.copy(hitResult.point);
+                    vrHitRing.lookAt(renderer.xr.isPresenting ? renderer.xr.getCamera().position : camera.position);
+
+                    if (dwellHoveredType === hType) {
+                        dwellElapsedMs += Math.min(rawDeltaMs, 50);
+                    } else {
+                        dwellHoveredType = hType;
+                        dwellElapsedMs = 0;
+                        dwellTriggered = false;
+                        vrSound.playHoverTick();
+                        triggerUniversalXrHaptics(xrSessionRef.current, 0.18, 15, {
+                            handedness: activeHandReport === 'left' || activeHandReport === 'right' ? activeHandReport : 'any',
+                            runtimeProfile: activeRuntimeReport
+                        });
+                    }
+
+                    const dwellPct = THREE.MathUtils.clamp(dwellElapsedMs / dwellTargetDurationMs, 0, 1);
+                    const ringScale = 0.65 + dwellPct * 0.65;
+                    vrHitRing.scale.setScalar(ringScale);
+
+                    if (dwellPct >= 1.0 && !dwellTriggered) {
+                        dwellTriggered = true;
+                        triggerVrComponentSelect(hitResult.object);
+                    } else if (now - lastCardRedrawTime > 90) {
+                        lastCardRedrawTime = now;
+                        drawFloatingVrInspectorCard(stateRef.current.selectedComponentKey, hType, dwellPct);
+                    }
+
+                    if (onUpdateVrPointer && now - lastPointerEmitTime > 110) {
+                        lastPointerEmitTime = now;
+                        onUpdateVrPointer({
+                            hoveredKey: hType,
+                            dwellProgress: Number(dwellPct.toFixed(2)),
+                            interactionMode: pointerMode,
+                            activeDeviceProfile: renderer.xr.isPresenting
+                                ? 'webxr_6dof'
+                                : activeGamepadCount > 0
+                                    ? 'gamepad_6dof'
+                                    : lastGyroAlpha !== null
+                                        ? 'gyro_3dof'
+                                        : 'desktop_kb_mouse',
+                            controllerCount: renderer.xr.isPresenting ? xrCtrlCount : activeGamepadCount,
+                            activeHand: activeHandReport,
+                            runtimeProfile: activeRuntimeReport,
+                            triggerPressure: activeTriggerPressure,
+                            targetRayMode: activeTargetRayMode,
+                            isHandTracking: activeIsHandTracking,
+                            handGesture: activeHandGesture,
+                            pinchStrength: activePinchStrength,
+                            pinchDistanceMm: activePinchDistanceMm
+                        });
+                    }
+                } else {
+                    vrHitMarker.visible = false;
+                    if (dwellHoveredType !== null || (activeIsHandTracking && now - lastPointerEmitTime > 140)) {
+                        if (dwellHoveredType !== null) {
+                            dwellHoveredType = null;
+                            dwellElapsedMs = 0;
+                            dwellTriggered = false;
+                            drawFloatingVrInspectorCard(stateRef.current.selectedComponentKey, null, 0);
+                        }
+                        lastPointerEmitTime = now;
+                        if (onUpdateVrPointer) {
+                            onUpdateVrPointer({
+                                hoveredKey: null,
+                                dwellProgress: 0,
+                                interactionMode: pointerMode,
+                                activeDeviceProfile: renderer.xr.isPresenting
+                                    ? 'webxr_6dof'
+                                    : activeGamepadCount > 0
+                                        ? 'gamepad_6dof'
+                                        : lastGyroAlpha !== null
+                                            ? 'gyro_3dof'
+                                            : 'desktop_kb_mouse',
+                                controllerCount: renderer.xr.isPresenting ? xrCtrlCount : activeGamepadCount,
+                                activeHand: activeHandReport,
+                                runtimeProfile: activeRuntimeReport,
+                                triggerPressure: activeTriggerPressure,
+                                targetRayMode: activeTargetRayMode,
+                                isHandTracking: activeIsHandTracking,
+                                handGesture: activeHandGesture,
+                                pinchStrength: activePinchStrength,
+                                pinchDistanceMm: activePinchDistanceMm
+                            });
+                        }
+                    }
+                }
+
+                // Position & Billboard the 3D Floating Inspector Card in Virtual Space
+                if (renderer.xr.isPresenting) {
+                    vrInspectorCardGroup.scale.setScalar(0.095);
+                    vrInspectorCardGroup.position.set(
+                        vrRigGroup.position.x - 1.05,
+                        vrRigGroup.position.y + 1.48,
+                        vrRigGroup.position.z - 2.15
+                    );
+                    renderer.xr.getCamera().getWorldPosition(scratchXrCamPos);
+                    vrInspectorCardGroup.lookAt(scratchXrCamPos);
+                } else if (customCamRef.current) {
+                    vrInspectorCardGroup.scale.setScalar(1.0);
+                    const camAzimuth = customCamRef.current.sphericalCurrent.theta;
+                    const lateralAngle = camAzimuth - 0.52;
+                    const cardDist = 20.5;
+                    vrInspectorCardGroup.position.set(
+                        Math.sin(lateralAngle) * cardDist,
+                        customCamRef.current.panCurrent.y + 1.2,
+                        Math.cos(lateralAngle) * cardDist
+                    );
+                    vrInspectorCardGroup.lookAt(camera.position);
+                }
+
+                // Update 3D Leader Line from Floating Card to Focused Component or Helix Center
+                const linePositions = vrLeaderLineGeo.attributes.position as THREE.BufferAttribute;
+                if (linePositions) {
+                    linePositions.setXYZ(0, vrInspectorCardGroup.position.x, vrInspectorCardGroup.position.y, vrInspectorCardGroup.position.z);
+                    if (vrHitMarker.visible) {
+                        linePositions.setXYZ(1, vrHitMarker.position.x, vrHitMarker.position.y, vrHitMarker.position.z);
+                    } else if (vrGameBeaconGroup.visible) {
+                        linePositions.setXYZ(1, vrGameBeaconGroup.position.x, vrGameBeaconGroup.position.y, vrGameBeaconGroup.position.z);
+                    } else if (customCamRef.current) {
+                        linePositions.setXYZ(1, customCamRef.current.panCurrent.x, customCamRef.current.panCurrent.y, customCamRef.current.panCurrent.z);
+                    }
+                    linePositions.needsUpdate = true;
+                }
+            } else {
+                vrHitMarker.visible = false;
+            }
+
+            // Standardized WebXR Headset Controller Input (Normalized Axes + 6-DoF Squeeze Grab + Depth-Sorted Stereo Render)
+            if (renderer.xr.isPresenting && dnaGroupRef.current) {
+                // 1. Direct 6-DoF Hand Grab Manipulation if Squeeze/Grip button is held
+                if (grabbedController) {
+                    grabbedController.getWorldPosition(scratchGrabPos);
+                    const dx = scratchGrabPos.x - grabStartCtrlPos.x;
+                    const dy = scratchGrabPos.y - grabStartCtrlPos.y;
+                    dnaGroupRef.current.rotation.y = grabStartHelixRotY + dx * 4.2;
+                    dnaGroupRef.current.position.y = THREE.MathUtils.clamp(
+                        grabStartHelixPosY + dy * 1.4,
+                        0.35,
+                        3.1
+                    );
+                }
+
+                // 2. Apply Deadzoned & Normalized Controller Axes (Left Hand = 3D Dolly Locomotion, Right/Single Hand = Helix Rotation & Elevation)
+                const session = renderer.xr.getSession();
+                const sessionCtrlCount = session?.inputSources ? session.inputSources.length : 2;
+                for (let i = 0; i < controllerSlots.length; i++) {
+                    const slot = controllerSlots[i];
+                    const axX = slot.axesNorm.primaryX;
+                    const axY = slot.axesNorm.primaryY;
+                    if (axX === 0 && axY === 0) continue;
+
+                    if (slot.handedness === 'left' && sessionCtrlCount > 1) {
+                        // Left Stick / Touchpad: Smooth 3D Dolly Locomotion around the Bio-Chamber
+                        vrRigGroup.position.x = THREE.MathUtils.clamp(vrRigGroup.position.x + axX * 1.85 * dt, -4.5, 4.5);
+                        vrRigGroup.position.z = THREE.MathUtils.clamp(vrRigGroup.position.z + axY * 1.85 * dt, -3.5, 4.5);
+                    } else {
+                        // Right Stick / Touchpad (or Single Controller): Helix Rotation / Snap-Turn + Vertical Elevation
+                        if (Math.abs(axX) > 0.01) {
+                            if (stateRef.current.vrLocomotionMode === 'snap') {
+                                if (snapTurnCooldownMs <= 0 && Math.abs(axX) > 0.58) {
+                                    dnaGroupRef.current.rotation.y -= Math.sign(axX) * THREE.MathUtils.degToRad(30);
+                                    snapTurnCooldownMs = 280;
+                                    triggerUniversalXrHaptics(session, 0.36, 25, {
+                                        handedness: slot.handedness === 'right' || slot.handedness === 'left' ? slot.handedness : 'any',
+                                        runtimeProfile: slot.runtimeProfile
+                                    });
+                                }
+                            } else {
+                                dnaGroupRef.current.rotation.y -= axX * 2.25 * dt;
+                            }
+                        }
+                        if (Math.abs(axY) > 0.01) {
+                            dnaGroupRef.current.position.y = THREE.MathUtils.clamp(
+                                dnaGroupRef.current.position.y - axY * 1.4 * dt,
+                                0.35,
+                                3.1
+                            );
+                        }
+                    }
+                }
+
+                // 3. Enforce WebXR Stereo Depth-Buffer Integrity & Synchronized Near/Far Clip Planes
+                synchronizeXrDepthAndCameraPlanes(true, session);
+                const gl = renderer.getContext();
+                gl.enable(gl.DEPTH_TEST);
+                gl.depthFunc(gl.LEQUAL);
+                gl.depthMask(true);
+
                 renderer.render(scene, camera);
                 emitVrPerformanceIfNeeded();
                 return;
@@ -1859,7 +4109,31 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 customCamRef.current.update();
             }
 
-            // Stereoscopic Side-by-Side (SBS) VR Lens Mode vs Standard/360 Panoramic Render with UnrealBloomPass
+            // Dynamic Macro Depth of Field (BokehPass) Calibration synchronized with Auto-Focus
+            if (!isSoftwareGl && bokehPass) {
+                const isDofOn = stateRef.current.dofEnabled;
+                bokehPass.enabled = isDofOn;
+                if (isDofOn && customCamRef.current) {
+                    const exactFocusDist = camera.position.distanceTo(customCamRef.current.panCurrent);
+                    smoothedDofFocusDist += (exactFocusDist - smoothedDofFocusDist) * 0.18;
+
+                    const isMacroAutoFocused = focusedTargetRef.current !== null;
+                    const desiredMaxBlur = isMacroAutoFocused ? 0.0075 : 0.0020;
+                    const desiredAperture = isMacroAutoFocused
+                        ? stateRef.current.dofAperture * 1.45
+                        : stateRef.current.dofAperture * 0.52;
+
+                    smoothedDofMaxBlur += (desiredMaxBlur - smoothedDofMaxBlur) * 0.12;
+                    smoothedDofAperture += (desiredAperture - smoothedDofAperture) * 0.12;
+
+                    const uniforms = bokehPass.uniforms as any;
+                    if (uniforms['focus']) uniforms['focus'].value = smoothedDofFocusDist;
+                    if (uniforms['aperture']) uniforms['aperture'].value = smoothedDofAperture;
+                    if (uniforms['maxblur']) uniforms['maxblur'].value = smoothedDofMaxBlur;
+                }
+            }
+
+            // Stereoscopic Side-by-Side (SBS) VR Lens Mode vs Standard/360 Panoramic Render with UnrealBloomPass & BokehPass
             if (stateRef.current.isVrModeActive && stateRef.current.isStereoLensMode && stereoCameraRef.current) {
                 const w = window.innerWidth;
                 const h = window.innerHeight;
@@ -1888,7 +4162,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             } else {
                 renderer.setScissorTest(false);
                 renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
-                if (stateRef.current.bloomEnabled) {
+                if (!renderer.xr.isPresenting && (stateRef.current.bloomEnabled || stateRef.current.dofEnabled)) {
                     composer.render();
                 } else {
                     renderer.render(scene, camera);
@@ -1968,6 +4242,8 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             }
             window.removeEventListener('resize', handleResize);
             window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+            window.removeEventListener('deviceorientation', handleDeviceOrientation);
             domEl.removeEventListener('contextmenu', handleContextMenu);
             domEl.removeEventListener('pointerdown', handlePointerDown);
             domEl.removeEventListener('pointermove', handlePointerMove);
@@ -1978,11 +4254,33 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             Object.values(letterTextures).forEach(tex => tex.dispose());
             bgTexture.dispose();
             envTexture.dispose();
+            vrCardTexture.dispose();
+            cardBackingGeo.dispose();
+            cardScreenGeo.dispose();
+            vrHitMarkerGeo.dispose();
+            vrHitRingGeo.dispose();
+            beaconOuterRingGeo.dispose();
+            beaconCrystalGeo.dispose();
+            vrLeaderLineGeo.dispose();
             vrDomeGeo.dispose();
             vrDomeWireGeo.dispose();
             horizonRingGeo.dispose();
             laserGeo.dispose();
+            laserMat0.dispose();
+            laserMat1.dispose();
+            sharedHandJointGeo.dispose();
+            sharedPinchOrbGeo.dispose();
+            sharedPinchRingGeo.dispose();
+            handSlots.forEach(hs => {
+                hs.visualRig.boneGeo.dispose();
+                hs.visualRig.boneMat.dispose();
+                hs.visualRig.jointMat.dispose();
+                hs.visualRig.tipMat.dispose();
+                hs.visualRig.pinchOrbMat.dispose();
+                hs.visualRig.pinchRingMat.dispose();
+            });
             bloomPass.dispose();
+            bokehPass.dispose();
             outputPass.dispose();
             composer.dispose();
             composerRenderTarget.dispose();
@@ -1993,7 +4291,45 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         };
     }, []);
 
-    // Synchronize Virtual Reality Mode (WebXR Immersive Session + 360° VR Environment)
+    // Synchronize Interactive VR CRISPR Repair Game Mode
+    useEffect(() => {
+        const g = vrGameStateRef.current;
+        if (isVrGameActive) {
+            const cleanSeq = calculateSequenceStats(sequence).clean || 'ATGC';
+            const totalPairs = Math.max(1, pairDynamicContainersRef.current.length || 24);
+            const startIdx = Math.min(10, totalPairs - 1);
+            const b1 = cleanSeq[startIdx % cleanSeq.length] || 'A';
+            const compMap: Record<string, string> = { A: 'T', T: 'A', G: 'C', C: 'G' };
+            g.active = true;
+            g.score = 0;
+            g.combo = 1;
+            g.repairedCount = 0;
+            g.timeRemainingSec = 60;
+            g.targetPairIndex = startIdx;
+            g.targetBaseType = b1;
+            g.complementBaseType = compMap[b1] || 'T';
+            g.lesionLabel = 'Mismatch Watson-Crick';
+            g.lastEventLabel = `Misi Aktif! Bidik Pasangan #${startIdx + 1} (${b1}⇄${g.complementBaseType}) pada Heliks`;
+            vrSound.playGameStateChange(true);
+        } else {
+            if (g.active) {
+                vrSound.playGameStateChange(false);
+            }
+            g.active = false;
+            g.lastEventLabel = null;
+            if (vrGameBeaconRef.current) {
+                vrGameBeaconRef.current.visible = false;
+            }
+        }
+        if (onUpdateVrGameTelemetry) {
+            onUpdateVrGameTelemetry({ ...g });
+        }
+        if (vrFloatingCardUpdaterRef.current) {
+            vrFloatingCardUpdaterRef.current(selectedComponentKey, null, 0);
+        }
+    }, [isVrGameActive]);
+
+    // Synchronize Virtual Reality Mode (Universal WebXR Immersive Session Fallback Chain + 360° VR Environment)
     useEffect(() => {
         const renderer = rendererRef.current;
         const scene = sceneRef.current;
@@ -2006,18 +4342,26 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 scene.fog.density = 0.0022;
             }
 
-            // Attempt native WebXR immersive-vr session if supported and not already presenting
+            // Attempt native WebXR session with progressive fallback chain for universal headset compatibility
             const xrNav = (navigator as any).xr;
             if (webXrNativeSupportedRef.current && xrNav && !renderer.xr.isPresenting && !xrSessionRef.current) {
-                xrNav.requestSession('immersive-vr', {
-                    optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
-                })
+                const preferredMode = webXrSupportedModeRef.current || 'immersive-vr';
+                xrNav
+                    .requestSession(preferredMode, {
+                        optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']
+                    })
+                    .catch(() =>
+                        xrNav.requestSession(preferredMode, {
+                            optionalFeatures: ['local-floor', 'hand-tracking']
+                        })
+                    )
+                    .catch(() => xrNav.requestSession(preferredMode))
                     .then(async (session: any) => {
                         xrSessionRef.current = session;
                         await renderer.xr.setSession(session);
                     })
                     .catch(() => {
-                        // Fallback gracefully to 360° Immersive / Stereoscopic VR Mode in-browser
+                        // Fallback gracefully to Universal 360° Immersive / Stereoscopic VR Mode in-browser
                         xrSessionRef.current = null;
                     });
             }
@@ -2114,6 +4458,31 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             }
         }
     }, [resetCameraTrigger]);
+
+    // Capture High-Resolution UI-Free 3D Snapshot synchronously right after rendering
+    useEffect(() => {
+        if (!snapshotTrigger || snapshotTrigger <= 0) return;
+        const renderer = rendererRef.current;
+        const scene = sceneRef.current;
+        const camera = cameraRef.current;
+        const composer = composerRef.current;
+        if (!renderer || !scene || !camera) return;
+
+        try {
+            // Render immediately before toDataURL() so the WebGL drawing buffer is populated
+            if ((stateRef.current.bloomEnabled || stateRef.current.dofEnabled) && composer) {
+                composer.render();
+            } else {
+                renderer.render(scene, camera);
+            }
+            const dataUrl = renderer.domElement.toDataURL('image/png');
+            if (onSnapshotCaptured) {
+                onSnapshotCaptured(dataUrl);
+            }
+        } catch {
+            // Ignore capture errors
+        }
+    }, [snapshotTrigger]);
 
     // Build or Rebuild DNA Structure when conformation, condition, or sequence changes
     useEffect(() => {
@@ -2257,8 +4626,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             addBondCylinder(sugarGroup, o5pPos, c5p, materials.sugarNode, geos.bioDoubleBondCylGeo);
             addBondCylinder(sugarGroup, c5p, fVertices[3].pos, materials.sugarNode, geos.bioDoubleBondCylGeo);
 
-            // Semi-translucent furanose pentose plane
+            // Semi-translucent furanose pentose plane (renderOrder 18: sorted after opaque bonds/atoms)
             const fFill = new THREE.Mesh(geos.furanoseFillGeo, materials.ringFill.sugar);
+            fFill.renderOrder = 18;
             sugarGroup.add(fFill);
             targetGroup.add(sugarGroup);
             backboneFocusNodesRef.current.push(phosGroup, sugarGroup);
@@ -2323,9 +4693,11 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     }
                 }
 
-                // Semi-translucent glowing aromatic ring fills
+                // Semi-translucent glowing aromatic ring fills (renderOrder 18: sorted after opaque covalent ring frame)
                 const imiFill = new THREE.Mesh(geos.purineImidazoleFillGeo, fillMat);
                 const pyrFill = new THREE.Mesh(geos.purinePyrimidineFillGeo, fillMat);
+                imiFill.renderOrder = 18;
+                pyrFill.renderOrder = 18;
                 basePlaneGroup.add(imiFill, pyrFill);
 
                 // Exocyclic substituents (Adenine vs Guanine)
@@ -2380,6 +4752,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
                 // Sleek recessed micro-chemical badge inside the 6-membered ring
                 const badge = new THREE.Mesh(geos.bioMicroBadgeGeo, badgeMaterials[baseType]);
+                badge.renderOrder = 14;
                 badge.position.set(0.56, 0.0, 1.38);
                 if (strandSign < 0) badge.scale.x = -1;
                 basePlaneGroup.add(badge);
@@ -2404,8 +4777,9 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                     addBondCylinder(basePlaneGroup, a.pos, b.pos, baseMat);
                 }
 
-                // Semi-translucent glowing hexagonal ring fill
+                // Semi-translucent glowing hexagonal ring fill (renderOrder 18)
                 const hexFill = new THREE.Mesh(geos.pyrimidineRingFillGeo, fillMat);
+                hexFill.renderOrder = 18;
                 basePlaneGroup.add(hexFill);
 
                 const c5Pos = hexAtoms[2].pos;
@@ -2457,6 +4831,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
                 // Sleek recessed micro-chemical badge inside the 6-membered ring
                 const badge = new THREE.Mesh(geos.bioMicroBadgeGeo, badgeMaterials[baseType]);
+                badge.renderOrder = 14;
                 badge.position.set(0.0, 0.0, 0.73);
                 if (strandSign < 0) badge.scale.x = -1;
                 basePlaneGroup.add(badge);
@@ -2608,18 +4983,20 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 const startPt = tip1.clone().add(lineOffset);
                 const endPt = tip2.clone().add(lineOffset);
 
-                // Subtle electrostatic H-bond glow cylinder connecting donor and acceptor
+                // Subtle electrostatic H-bond glow cylinder connecting donor and acceptor (renderOrder 20)
                 const glowTube = new THREE.Mesh(geos.hbondGlowCylGeo, materials.hbondGlowTube);
+                glowTube.renderOrder = 20;
                 glowTube.position.copy(startPt).add(endPt).multiplyScalar(0.5);
                 glowTube.scale.set(1, gapLen, 1);
                 glowTube.quaternion.setFromUnitVectors(upAxis, gapDir);
                 bioBond.add(glowTube);
 
-                // Segmented hydrogen bond capsules
+                // Segmented hydrogen bond capsules (renderOrder 12)
                 for (let d = 0; d < dashesPerBond; d++) {
                     const fraction = (d + 0.5) / dashesPerBond;
                     const dashPos = new THREE.Vector3().addVectors(startPt, gapVector.clone().multiplyScalar(fraction));
                     const dashMesh = new THREE.Mesh(geos.hbondDashGeo, materials.hbondDot);
+                    dashMesh.renderOrder = 12;
                     dashMesh.position.copy(dashPos);
                     dashMesh.quaternion.setFromUnitVectors(upAxis, gapDir);
                     bioBond.add(dashMesh);
@@ -2905,6 +5282,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const curve1 = new THREE.CatmullRomCurve3(splinePointsStrand1);
         const tube1Geo = new THREE.TubeGeometry(curve1, 240, 0.26, 18, false);
         const ribbon1 = new THREE.Mesh(tube1Geo, materials.backbone);
+        ribbon1.renderOrder = 11;
         ribbon1.userData = { type: 'backbone', strand: 1, initialPos: new THREE.Vector3(0, 0, 0) };
         dnaGroup.add(ribbon1);
         allInteractiveMeshesRef.current.push(ribbon1);
@@ -2915,6 +5293,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const railCurve1 = new THREE.CatmullRomCurve3(splinePointsRail1);
         const rail1Geo = new THREE.TubeGeometry(railCurve1, 240, 0.095, 12, false);
         const ribbon1Rail = new THREE.Mesh(rail1Geo, materials.backboneRail);
+        ribbon1Rail.renderOrder = 11;
         ribbon1Rail.userData = { type: 'backbone', strand: 1, initialPos: new THREE.Vector3(0, 0, 0) };
         dnaGroup.add(ribbon1Rail);
         allInteractiveMeshesRef.current.push(ribbon1Rail);
@@ -2925,6 +5304,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const curve2 = new THREE.CatmullRomCurve3(splinePointsStrand2);
         const tube2Geo = new THREE.TubeGeometry(curve2, 240, 0.26, 18, false);
         const ribbon2 = new THREE.Mesh(tube2Geo, materials.backbone);
+        ribbon2.renderOrder = 11;
         ribbon2.userData = { type: 'backbone', strand: 2, initialPos: new THREE.Vector3(0, 0, 0) };
         dnaGroup.add(ribbon2);
         allInteractiveMeshesRef.current.push(ribbon2);
@@ -2935,6 +5315,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         const railCurve2 = new THREE.CatmullRomCurve3(splinePointsRail2);
         const rail2Geo = new THREE.TubeGeometry(railCurve2, 240, 0.095, 12, false);
         const ribbon2Rail = new THREE.Mesh(rail2Geo, materials.backboneRail);
+        ribbon2Rail.renderOrder = 11;
         ribbon2Rail.userData = { type: 'backbone', strand: 2, initialPos: new THREE.Vector3(0, 0, 0) };
         dnaGroup.add(ribbon2Rail);
         allInteractiveMeshesRef.current.push(ribbon2Rail);
@@ -2948,6 +5329,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             const p2 = splinePointsStrand2[i];
 
             const mg1 = new THREE.Mesh(geos.mgIonGeo, conditionMaterials.ionMg);
+            mg1.renderOrder = 10;
             mg1.position.copy(p1).multiplyScalar(1.22);
             mg1.userData = { type: 'ion_mg', parentGroup: ionGroup };
             ionGroup.add(mg1);
@@ -2955,6 +5337,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             baseMeshesRef.current.ion_mg.push(mg1);
 
             const mg2 = new THREE.Mesh(geos.mgIonGeo, conditionMaterials.ionMg);
+            mg2.renderOrder = 10;
             mg2.position.copy(p2).multiplyScalar(1.22);
             mg2.userData = { type: 'ion_mg', parentGroup: ionGroup };
             ionGroup.add(mg2);
@@ -2963,8 +5346,11 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
 
             const waterMol = new THREE.Group();
             const wO = new THREE.Mesh(geos.waterOGeo, conditionMaterials.waterO);
+            wO.renderOrder = 22;
             const wH1 = new THREE.Mesh(geos.methylHydrogenShape, materials.cpk.H);
             const wH2 = new THREE.Mesh(geos.methylHydrogenShape, materials.cpk.H);
+            wH1.renderOrder = 10;
+            wH2.renderOrder = 10;
             wH1.position.set(0.14, 0.12, 0);
             wH2.position.set(-0.14, 0.12, 0);
             waterMol.add(wO, wH1, wH2);
@@ -3173,7 +5559,7 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
         applyRenderMode(renderMode);
     }, [renderMode]);
 
-    // Handle Component Isolation filter
+    // Handle Component Isolation filter (synchronizes depthWrite with transparency so dimmed components never occlude active targets in VR)
     const applyFilter = (filter: FilterComponentType) => {
         allInteractiveMeshesRef.current.forEach(mesh => {
             if (!mesh || !mesh.userData) return;
@@ -3181,16 +5567,27 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
             const show = (filter === 'all' || type === filter || (filter === 'backbone' && (type === 'backbone' || type === 'P_atom')));
             if (mesh.material && (mesh.material as THREE.Material).transparent !== undefined) {
                 const mat = mesh.material as THREE.MeshPhysicalMaterial;
-                // Preserve inherent translucency of aromatic ring fills when visible
+                // Preserve inherent translucency of aromatic ring fills & water oxygen when visible
                 const isRingFill = (mat === materialsRef.current?.ringFill?.A || mat === materialsRef.current?.ringFill?.T || mat === materialsRef.current?.ringFill?.G || mat === materialsRef.current?.ringFill?.C || mat === materialsRef.current?.ringFill?.sugar);
                 const isGlowTube = (mat === materialsRef.current?.hbondGlowTube);
+                const isWaterO = (mat === conditionMaterialsRef.current?.waterO);
                 if (isRingFill) {
                     mat.opacity = show ? 0.60 : 0.06;
+                    mat.depthWrite = false;
                 } else if (isGlowTube) {
                     mat.opacity = show ? 0.22 : 0.03;
+                    mat.depthWrite = false;
+                } else if (isWaterO) {
+                    mat.opacity = show ? 0.82 : 0.10;
+                    mat.depthWrite = false;
                 } else {
+                    const prevDepthWrite = mat.depthWrite;
                     mat.transparent = !show;
                     mat.opacity = show ? 1.0 : 0.12;
+                    mat.depthWrite = show;
+                    if (prevDepthWrite !== show) {
+                        mat.needsUpdate = true;
+                    }
                 }
             }
         });
@@ -3335,13 +5732,17 @@ export const DnaCanvas: React.FC<DnaCanvasProps> = ({
                 const clicked = intersects[0].object;
                 const type = clicked.userData.type;
                 if (type) {
-                    const tg = clicked.userData.parentGroup || clicked;
-                    last3dClickedRef.current = { type, object: tg, time: performance.now() };
-                    onSelectComponent(type);
-                    bloomPulseBoostRef.current = 0.20;
-                    const origScale = tg.scale.clone();
-                    animateVector(tg.scale, origScale.clone().multiplyScalar(1.25), 200, easeOutBack);
-                    setTimeout(() => animateVector(tg.scale, origScale, 300, easeInOutCubic), 220);
+                    if (vrComponentSelectTriggerRef.current) {
+                        vrComponentSelectTriggerRef.current(clicked);
+                    } else {
+                        const tg = clicked.userData.parentGroup || clicked;
+                        last3dClickedRef.current = { type, object: tg, time: performance.now() };
+                        onSelectComponent(type);
+                        bloomPulseBoostRef.current = 0.20;
+                        const origScale = tg.scale.clone();
+                        animateVector(tg.scale, origScale.clone().multiplyScalar(1.25), 200, easeOutBack);
+                        setTimeout(() => animateVector(tg.scale, origScale, 300, easeInOutCubic), 220);
+                    }
                     return true;
                 }
             }

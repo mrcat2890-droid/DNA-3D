@@ -6,6 +6,46 @@ Format dokumentasi ini mengacu pada standar [Keep a Changelog](https://keepachan
 
 ---
 
+## [1.6.0] - 2026-10-27
+
+### Ditambahkan (Added)
+- **Integrasi WebXR Hand Input API — Pelacakan Tangan 25 Sendi & Gestur Molekuler Langsung (`DnaCanvas`, `App`, `types/dna.ts`)**:
+  - **Kerangka Tangan 3D Bio-Holografik (*25-Joint Articulated Hand Skeleton*)**: Merender 25 sendi anatomi tangan standar W3C (`wrist`, `thumb`, `index`, `middle`, `ring`, dan `little finger` dari metakarpal hingga ujung jari) beserta 24 tulang silinder penghubung secara *real-time* menggunakan `xrFrame.getJointPose(jointSpace, refSpace)` dengan *fallback* otomatis ke `renderer.xr.getHand(i).joints`.
+  - **Indikator *Pinch Energy Orb* & *Reticle* Presisi**: Menampilkan bola energi *cyan* bercahaya dan cincin bidik (*reticle*) tepat di titik tengah antara ujung ibu jari (`thumb-tip`) dan ujung jari telunjuk (`index-finger-tip`) yang berubah warna secara dinamis saat jarak cubitan mendekati ambang aktivasi.
+  - **Gestur *Pinch-to-Select* & *Direct Fingertip Touch***: Memungkinkan pengguna memilih komponen nukleotida atau memperbaiki lesi mutasi DNA hanya dengan mencubitkan ibu jari dan telunjuk (`≤ 24 mm` ambang aktif, `< 35 mm` histeresis pelepas) maupun menyentuhkan ujung jari telunjuk langsung ke molekul di ruang 3D (`≤ 11.5 cm`).
+  - **Manipulasi Struktur Molekuler Langsung dengan Tangan (*Direct Hand Gestures*)**:
+    - ***Pinch-Hold & Drag-to-Rotate / Elevate* (`pinch_drag`)**: Mencubit dan menahan di ruang kosong lalu menggerakkan tangan secara horizontal untuk memutar heliks DNA dengan momentum inersia mulus, atau menggerakkan tangan secara vertikal untuk mengatur ketinggian struktur molekul.
+    - ***Bimanual Two-Hand Pinch Scale & Twist* (`bimanual_scale`)**: Mencubit dengan **kedua tangan secara bersamaan** untuk memperbesar/memperkecil skala heliks DNA (`0.45x` – `2.80x`) dengan merentangkan atau merapatkan kedua tangan, sekaligus memutar orientasi heliks mengikuti sudut kemiringan garis antar-tangan.
+    - ***Whole-Hand Fist Grab* (`fist_grab`)**: Mengepalkan keempat jari ke arah telapak tangan di dekat molekul untuk mencengkeram dan memutar struktur DNA secara langsung.
+  - **Telemetri Pelacakan Tangan & Gestur pada VR HUD**: Menambahkan lencana status `WEBXR HAND API (25 SENDI)`, indikator pemicu `HAND PINCH` / `HAND SENTUH`, serta pembacaan gestur aktif dan jarak cubitan (`mm` & persentase kekuatan cubitan) secara *real-time* di panel VR HUD.
+
+- **Standarisasi WebXR InputSource API Multi-Headset & Haptik Universal (`DnaCanvas`)**:
+  - **Deteksi & Normalisasi Profil Kontroler Lintas Platform**: Mengenali secara otomatis dan menormalisasi pemetaan sumbu/tombol untuk **Meta Quest (Touch / Quest 2 / 3 / 3S / Pro)**, **Pico XR (Pico 4 / Neo 3)**, **Valve Index Knuckles**, **HTC Vive Wand**, **Windows Mixed Reality (WMR)**, **Apple Vision Pro (`transient-pointer` Eye + Hand Pinch)**, serta **HTML5 Gamepad API**.
+  - **Kalibrasi Sudut Ergonomi Sinar Laser (*Wrist-Pitch Offset*) & *3D Magnetic Aim-Assist***: Menyesuaikan kemiringan sinar laser berdasarkan geometri perangkat keras dan menambahkan kerucut bantuan bidik magnetik 3D (`≤ 0.42 m`) agar pemilihan molekul tetap akurat meskipun tangan bergetar di dalam VR.
+  - **Umpan Balik Getaran *Dual-Path WebXR Haptics***: Mendukung getaran kontroler lintas *runtime* melalui jalur ganda `gamepad.hapticActuators` dan `gamepad.vibrationActuator.playEffect('dual-rumble')` saat menyorot basa, mengunci target, atau memperbaiki mutasi DNA.
+
+### Dioptimalkan (Optimized)
+- **Sinkronisasi *Depth Buffer* Stereoskopik & Pencegahan *Clipping* WebXR (`DnaCanvas`)**:
+  - Mengonfigurasi fungsi kedalaman WebGL (`gl.depthFunc(gl.LEQUAL)`), `logarithmicDepthBuffer`, pengurutan render objek transparan berbasis jarak kamera gabungan (`ArrayCamera` mata kiri & kanan), serta sinkronisasi bidang klip `depthNear = 0.05m` dan `depthFar = 180.0m` melalui `XRSession.updateRenderState()` untuk menghilangkan kedipan tekstur (*Z-fighting*) dan pemotongan geometri saat pengguna mengamati molekul dari jarak sangat dekat di VR.
+
+---
+
+## [1.5.0] - 2026-10-26
+
+### Ditambahkan (Added)
+- **Mode Misi Game VR: Perbaikan Mutasi DNA (*CRISPR Repair Mode*) & Audio Spasial (`DnaCanvas`, `vrAudio.ts`, `TopNav`)**:
+  - Mode permainan interaktif berdurasi 60 detik di dalam VR maupun desktop di mana pengguna memindai dan memperbaiki lesi/mismatch pasangan basa DNA menggunakan sinar laser kontroler VR, cubitan tangan (*Hand Pinch*), klik kursor, atau tatapan mata (*Gaze-Dwell*).
+  - Dilengkapi indikator kristal oktahedral merah berdenyut pada lokus mutasi, efek ledakan partikel penyembuhan 3D, sistem skor dan kombo beruntun (*streak multiplier*), serta **Synthesizer Audio Spasial Web Audio API (`VrSpatialSoundEngine`)** tanpa ketergantungan berkas audio eksternal.
+- **Kartu Inspektor Holografik 3D di Ruang Virtual & *Gaze-Dwell Selection* (`DnaCanvas`)**:
+  - Panel informasi molekuler berbasis tekstur kanvas resolusi tinggi yang melayang langsung di samping komponen DNA di dalam ruang VR, dilengkapi cincin pengisian waktu tatapan (*Gaze-Dwell Reticle* 1,2 detik) untuk memilih molekul tanpa kontroler.
+- **Pencahayaan PBR *RoomEnvironment* & Efek *Macro Depth of Field (BokehPass)* (`DnaCanvas`, `ControlsPanel`)**:
+  - Integrasi refleksi lingkungan mikroskopis berbasis fisik (`PMREMGenerator` + `RoomEnvironment`) dengan penggeser intensitas refleksi PBR untuk memberikan kilau permukaan atom CPK dan cincin purin/pirimidin yang realistis.
+  - Efek kedalaman ruang fotografi makro (`BokehPass`) yang secara otomatis mengunci jarak fokus pada nukleotida yang sedang diinspeksi saat fitur *Auto-Focus* aktif.
+- **Studio Ekspor Bioinformatika (`.PDB` & `.FASTA`) dan Snapshot 3D Resolusi Tinggi (`DnaCanvas`, `BottomBar`, `ControlsPanel`)**:
+  - Fitur unduhan instan untuk berkas sekuens standar **FASTA (`.fasta`)**, berkas koordinat struktur atomik 3D **Protein Data Bank (`.pdb`)** lengkap dengan rekaman `ATOM` dan `CONECT`, tabel metrik termodinamika (`.csv` / `.json`), serta tangkapan layar kanvas 3D **PNG Resolusi Tinggi** tanpa elemen UI.
+
+---
+
 ## [1.4.0] - 2026-10-25
 
 ### Ditambahkan (Added)

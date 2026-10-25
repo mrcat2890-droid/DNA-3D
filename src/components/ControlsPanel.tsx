@@ -9,7 +9,10 @@ import {
     CameraControlMode,
     CameraStepAction,
     WebXrSupportStatus,
-    BloomPresetType
+    BloomPresetType,
+    ExportFormatType,
+    VrLocomotionMode,
+    VrGameTelemetry
 } from '../types/dna';
 
 export const BLOOM_PRESETS: Record<Exclude<BloomPresetType, 'custom'>, { label: string; strength: number; threshold: number; desc: string }> = {
@@ -60,6 +63,13 @@ interface ControlsPanelProps {
     onToggleBloom: () => void;
     onChangeBloomStrength: (strength: number) => void;
     onChangeBloomThreshold: (threshold: number) => void;
+    dofEnabled: boolean;
+    dofAperture: number;
+    envReflectionIntensity: number;
+    onToggleDof: () => void;
+    onChangeDofAperture: (aperture: number) => void;
+    onChangeEnvReflectionIntensity: (intensity: number) => void;
+    onExportFile: (format: ExportFormatType) => void;
     assemblyMode: AssemblyModeType;
     onUnzip: () => void;
     onExplode: () => void;
@@ -77,8 +87,15 @@ interface ControlsPanelProps {
     isVrModeActive: boolean;
     isStereoLensMode: boolean;
     webXrStatus: WebXrSupportStatus;
+    vrLocomotionMode: VrLocomotionMode;
+    isVrGameActive: boolean;
+    isVrAudioMuted: boolean;
+    vrGameTelemetry?: VrGameTelemetry;
     onToggleVrMode: () => void;
     onToggleStereoLensMode: () => void;
+    onChangeVrLocomotionMode: (mode: VrLocomotionMode) => void;
+    onToggleVrGame: () => void;
+    onToggleVrAudioMute: () => void;
 }
 
 const CONFORMATION_SUMMARY: Record<ConformationType, { title: string; detail: string }> = {
@@ -121,6 +138,13 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
     onToggleBloom,
     onChangeBloomStrength,
     onChangeBloomThreshold,
+    dofEnabled,
+    dofAperture,
+    envReflectionIntensity,
+    onToggleDof,
+    onChangeDofAperture,
+    onChangeEnvReflectionIntensity,
+    onExportFile,
     assemblyMode,
     onUnzip,
     onExplode,
@@ -138,8 +162,15 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
     isVrModeActive,
     isStereoLensMode,
     webXrStatus,
+    vrLocomotionMode,
+    isVrGameActive,
+    isVrAudioMuted,
+    vrGameTelemetry,
     onToggleVrMode,
-    onToggleStereoLensMode
+    onToggleStereoLensMode,
+    onChangeVrLocomotionMode,
+    onToggleVrGame,
+    onToggleVrAudioMute
 }) => {
     const [inputSeq, setInputSeq] = useState(sequence);
     const [activeSectionTab, setActiveSectionTab] = useState<PanelTabCategory>('all');
@@ -575,11 +606,11 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
 
                 {activeSectionTab === 'all' && <div className="divider"></div>}
 
-                {/* SECTION 3: OPTIK BLOOM, KAMERA & WEBXR */}
+                {/* SECTION 3: OPTIK BLOOM, BOKEH MAKRO, PBR, KAMERA & WEBXR */}
                 <div className={showOptics ? 'panel-module' : 'hidden'}>
                     <div className="panel-section-header">
-                        <span className="panel-section-title">07. Post-Processing Optik (Bloom)</span>
-                        <span className="panel-section-meta">UnrealBloomPass HDR</span>
+                        <span className="panel-section-title">07. Post-Processing Optik (Bloom, Bokeh &amp; PBR)</span>
+                        <span className="panel-section-meta">HDR &amp; RoomEnv</span>
                     </div>
                     <div className="toggle-group">
                         <button
@@ -653,6 +684,58 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
                                 </div>
                             </div>
                         )}
+
+                        {/* Depth of Field (BokehPass Makro) & Refleksi PBR RoomEnvironment */}
+                        <button
+                            id="btn-toggle-dof"
+                            type="button"
+                            className={`ctrl-btn ${dofEnabled ? 'active' : ''}`}
+                            onClick={onToggleDof}
+                        >
+                            <span className="ctrl-btn-label">Bokeh Kedalaman Ruang (Depth of Field)</span>
+                            <span className={`status-pill ${dofEnabled ? 'on' : 'off'}`}>
+                                {dofEnabled ? 'AKTIF' : 'NONAKTIF'}
+                            </span>
+                        </button>
+                        <div className="bloom-calibration-box">
+                            {dofEnabled && (
+                                <div className="bloom-row">
+                                    <span className="bloom-label">
+                                        Bukaan Bokeh Makro <b className="mono-val">{(dofAperture * 10000).toFixed(1)}f</b>
+                                    </span>
+                                    <input
+                                        id="slider-dof-aperture"
+                                        type="range"
+                                        min={0.00004}
+                                        max={0.00045}
+                                        step={0.00001}
+                                        value={dofAperture}
+                                        onChange={(e) => onChangeDofAperture(parseFloat(e.target.value))}
+                                        className="bloom-slider"
+                                        title="Atur bukaan lensa BokehPass (otomatis memperdalam fokus saat Auto-Focus nukleotida)"
+                                    />
+                                </div>
+                            )}
+                            <div className="bloom-row">
+                                <span className="bloom-label">
+                                    Kilau PBR Lab (PMREM) <b className="mono-val">{envReflectionIntensity.toFixed(2)}×</b>
+                                </span>
+                                <input
+                                    id="slider-env-reflection"
+                                    type="range"
+                                    min={0.20}
+                                    max={2.40}
+                                    step={0.05}
+                                    value={envReflectionIntensity}
+                                    onChange={(e) => onChangeEnvReflectionIntensity(parseFloat(e.target.value))}
+                                    className="bloom-slider"
+                                    title="Intensitas pantulan mikroskopis RoomEnvironment pada permukaan atom CPK dan cincin purin/pirimidin"
+                                />
+                            </div>
+                            <div className="bloom-desc">
+                                Fokus BokehPass melacak jarak titik bidik kamera secara dinamis dan otomatis mempertajam efek makro saat Auto-Focus nukleotida aktif.
+                            </div>
+                        </div>
                     </div>
 
                     <div className="divider"></div>
@@ -736,11 +819,11 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
 
                     <div className="divider"></div>
 
-                    {/* REALITAS VIRTUAL (WebXR 360°) */}
+                    {/* REALITAS VIRTUAL UNIVERSAL & GAME VR (WebXR 6-DoF / Gamepad / 360°) */}
                     <div className="panel-section-header">
-                        <span className="panel-section-title">09. Lingkungan Imersif WebXR</span>
+                        <span className="panel-section-title">09. Kompatibilitas VR Universal &amp; Game</span>
                         <span className="panel-section-meta">
-                            {webXrStatus === 'supported' ? 'Headset Siap' : 'Simulasi 360°'}
+                            {webXrStatus === 'supported' ? 'WebXR 6-DoF Siap' : 'Universal 360°/Pad'}
                         </span>
                     </div>
                     <div className="toggle-group">
@@ -750,11 +833,59 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
                             className={`ctrl-btn ${isVrModeActive ? 'active' : ''}`}
                             onClick={onToggleVrMode}
                         >
-                            <span className="ctrl-btn-label">Mode Virtual Reality (360°)</span>
+                            <span className="ctrl-btn-label">Mode Virtual Reality Universal</span>
                             <span className={`status-pill ${isVrModeActive ? 'on' : 'off'}`}>
                                 {isVrModeActive ? 'AKTIF' : 'NONAKTIF'}
                             </span>
                         </button>
+
+                        <button
+                            type="button"
+                            id="btn-panel-toggle-vr-game"
+                            className={`ctrl-btn ${isVrGameActive ? 'active' : ''}`}
+                            onClick={onToggleVrGame}
+                            title="Aktifkan Misi Game Perbaikan Heliks CRISPR (Kompatibel dengan Laser VR, Gaze, Gamepad, dan Klik/Spasi)"
+                        >
+                            <span className="ctrl-btn-label">Misi Game VR: Perbaikan CRISPR</span>
+                            <span className={`status-pill ${isVrGameActive ? 'on' : 'off'}`}>
+                                {isVrGameActive ? `SKOR ${vrGameTelemetry?.score ?? 0}` : 'MULAI GAME'}
+                            </span>
+                        </button>
+
+                        <div className="camera-mode-tabs" role="group" aria-label="Mode Lokomosi VR">
+                            <button
+                                type="button"
+                                id="btn-vr-loco-snap"
+                                className={`cam-seg-btn ${vrLocomotionMode === 'snap' ? 'active' : ''}`}
+                                onClick={() => onChangeVrLocomotionMode('snap')}
+                                title="Putaran Bertahap 30° (Snap Turn) untuk kenyamanan anti-mual di semua headset VR"
+                            >
+                                Lokomosi Snap 30°
+                            </button>
+                            <button
+                                type="button"
+                                id="btn-vr-loco-smooth"
+                                className={`cam-seg-btn ${vrLocomotionMode === 'smooth' ? 'active' : ''}`}
+                                onClick={() => onChangeVrLocomotionMode('smooth')}
+                                title="Putaran Kontinu Halus (Smooth Turn) dengan Thumbstick / Gamepad / QE"
+                            >
+                                Lokomosi Halus
+                            </button>
+                        </div>
+
+                        <button
+                            type="button"
+                            id="btn-panel-toggle-vr-audio"
+                            className={`ctrl-btn ${!isVrAudioMuted ? 'active' : ''}`}
+                            onClick={onToggleVrAudioMute}
+                            title="Efek suara sintesis prosedural Web Audio API untuk bidikan laser VR, perbaikan DNA, dan umpan balik haptik"
+                        >
+                            <span className="ctrl-btn-label">Audio Synth VR &amp; Haptik</span>
+                            <span className={`status-pill ${!isVrAudioMuted ? 'on' : 'off'}`}>
+                                {!isVrAudioMuted ? 'AKTIF' : 'BISU'}
+                            </span>
+                        </button>
+
                         {isVrModeActive && (
                             <button
                                 type="button"
@@ -768,6 +899,81 @@ export const ControlsPanel: React.FC<ControlsPanelProps> = ({
                                 </span>
                             </button>
                         )}
+                        <div className="vr-raycast-note">
+                            <span className="vr-raycast-badge">KOMPATIBEL SEMUA PLATFORM VR</span>
+                            <span>Mendukung penuh Meta Quest 2/3/Pro, Pico 4, HTC Vive, Valve Index, Apple Vision Pro (WebXR 6-DoF + Grip Grab), Gamepad Xbox/PlayStation, Gyro 3-DoF, serta WASD/Mouse.</span>
+                        </div>
+                    </div>
+                </div>
+
+                {activeSectionTab === 'all' && <div className="divider"></div>}
+
+                {/* SECTION 4: STUDIO EKSPOR SAINS & SNAPSHOT 3D */}
+                <div className={showStructure || showBiophysics ? 'panel-module' : 'hidden'}>
+                    <div className="panel-section-header">
+                        <span className="panel-section-title">10. Studio Ekspor Sains &amp; Snapshot 3D</span>
+                        <span className="panel-section-meta">PDB · FASTA · CSV</span>
+                    </div>
+                    <div className="export-studio-card">
+                        <button
+                            type="button"
+                            id="btn-export-png"
+                            className="export-snapshot-btn"
+                            onClick={() => onExportFile('png')}
+                            title="Tangkap gambar 3D beresolusi tinggi langsung dari WebGL tanpa panel antarmuka (UI-Free PNG)"
+                        >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                                <circle cx="12" cy="13" r="4" />
+                            </svg>
+                            <div className="export-snapshot-text">
+                                <span className="export-snapshot-title">Tangkap Snapshot 3D Murni (.PNG)</span>
+                                <span className="export-snapshot-sub">Render WebGL Resolusi Tinggi Tanpa Panel UI</span>
+                            </div>
+                        </button>
+
+                        <div className="export-format-grid">
+                            <button
+                                type="button"
+                                id="btn-export-pdb"
+                                className="export-format-btn"
+                                onClick={() => onExportFile('pdb')}
+                                title="Unduh koordinat atomik 3D standar Protein Data Bank (.pdb) dalam satuan Angstrom (Å)"
+                            >
+                                <span className="export-ext-tag">.PDB</span>
+                                <span className="export-format-name">Koordinat Atom 3D</span>
+                            </button>
+                            <button
+                                type="button"
+                                id="btn-export-fasta"
+                                className="export-format-btn"
+                                onClick={() => onExportFile('fasta')}
+                                title="Unduh sekuens untai Sense 5'→3' dan Antisense komplementer dalam standar bioinformatika FASTA (.fasta)"
+                            >
+                                <span className="export-ext-tag">.FASTA</span>
+                                <span className="export-format-name">Sekuens Untai Ganda</span>
+                            </button>
+                            <button
+                                type="button"
+                                id="btn-export-csv"
+                                className="export-format-btn"
+                                onClick={() => onExportFile('csv')}
+                                title="Unduh tabel pasangan basa, koordinat aksial Z (Å), sudut puntir, dan metrik termodinamika (.csv)"
+                            >
+                                <span className="export-ext-tag">.CSV</span>
+                                <span className="export-format-name">Tabel Termodinamika</span>
+                            </button>
+                            <button
+                                type="button"
+                                id="btn-export-json"
+                                className="export-format-btn"
+                                onClick={() => onExportFile('json')}
+                                title="Unduh struktur data lengkap kristalografi dan profil termodinamika (.json)"
+                            >
+                                <span className="export-ext-tag">.JSON</span>
+                                <span className="export-format-name">Data Kristalografi</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 

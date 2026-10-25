@@ -1,5 +1,5 @@
 import React from 'react';
-import { ConformationType, RenderModeType } from '../types/dna';
+import { ConformationType, RenderModeType, ExportFormatType } from '../types/dna';
 
 interface HeaderProps {
     conformation: ConformationType;
@@ -13,6 +13,7 @@ interface HeaderProps {
     onOpenTutorial: () => void;
     onToggleControls: () => void;
     onToggleInspector: () => void;
+    onExportFile?: (format: ExportFormatType) => void;
 }
 
 const RENDER_MODE_LABELS: Record<RenderModeType, string> = {
@@ -33,7 +34,8 @@ export const Header: React.FC<HeaderProps> = ({
     onToggleVrMode,
     onOpenTutorial,
     onToggleControls,
-    onToggleInspector
+    onToggleInspector,
+    onExportFile
 }) => {
     return (
         <header id="app-header">
@@ -94,6 +96,37 @@ export const Header: React.FC<HeaderProps> = ({
                         </svg>
                         <span className="header-btn-text">Inspektor</span>
                     </button>
+
+                    {onExportFile && (
+                        <>
+                            <button
+                                id="btn-header-snapshot"
+                                className="header-btn header-btn-export"
+                                title="Tangkap Snapshot 3D Resolusi Tinggi Tanpa Panel UI (.PNG)"
+                                onClick={() => onExportFile('png')}
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                                    <circle cx="12" cy="13" r="4" />
+                                </svg>
+                                <span className="header-btn-text">Snapshot 3D</span>
+                            </button>
+
+                            <button
+                                id="btn-header-export-pdb"
+                                className="header-btn header-btn-export"
+                                title="Unduh Berkas Koordinat Atom 3D Standar Protein Data Bank (.PDB)"
+                                onClick={() => onExportFile('pdb')}
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                    <polyline points="7 10 12 15 17 10" />
+                                    <line x1="12" y1="15" x2="12" y2="3" />
+                                </svg>
+                                <span className="header-btn-text">.PDB</span>
+                            </button>
+                        </>
+                    )}
 
                     <button
                         id="btn-toggle-vr"
