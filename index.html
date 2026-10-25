@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Model DNA 3D Ultra-Realistis (Adaptif Semua Perangkat)</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Font Inter & Orbitron -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@600;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Signature DNA Molecular Animated Background Layer -->
+    <div style="position: fixed; inset: 0; overflow: hidden; z-index: 0; pointer-events: none;">
+        <!-- Ambient Neon Glow Core -->
+        <div style="position: absolute; top: -10%; left: -10%; width: 50vw; height: 50vw; background: radial-gradient(circle, rgba(0, 240, 255, 0.12) 0%, transparent 70%); filter: blur(60px);"></div>
+        <div style="position: absolute; bottom: -15%; right: -10%; width: 55vw; height: 55vw; background: radial-gradient(circle, rgba(29, 99, 255, 0.15) 0%, transparent 70%); filter: blur(70px);"></div>
+
+        <!-- Floating Nucleotide Base Pairs in Parallax Depth -->
+        <div class="ambient-nucleotide" style="left: 8%; color: #1d63ff; font-size: 2rem; opacity: 0.25; animation-duration: 22s; animation-delay: 0s;">A</div>
+        <div class="ambient-nucleotide" style="left: 14%; color: #ffb703; font-size: 1.8rem; opacity: 0.25; animation-duration: 24s; animation-delay: 3s;">T</div>
+        <div class="ambient-nucleotide" style="left: 82%; color: #00d659; font-size: 2.2rem; opacity: 0.25; animation-duration: 26s; animation-delay: 6s;">G</div>
+        <div class="ambient-nucleotide" style="left: 88%; color: #ff2a4b; font-size: 1.9rem; opacity: 0.25; animation-duration: 23s; animation-delay: 9s;">C</div>
+
+        <!-- Hydrogen Bonding Sparkle Motes -->
+        <div class="ambient-hbond-spark" style="top: 25%; left: 20%; width: 4px; height: 4px; background: #00f0ff; box-shadow: 0 0 10px #00f0ff; animation-duration: 4s;"></div>
+        <div class="ambient-hbond-spark" style="top: 60%; left: 15%; width: 3px; height: 3px; background: #38bdf8; box-shadow: 0 0 8px #38bdf8; animation-duration: 5s; animation-delay: 1.5s;"></div>
+        <div class="ambient-hbond-spark" style="top: 35%; right: 18%; width: 5px; height: 5px; background: #00ff66; box-shadow: 0 0 12px #00ff66; animation-duration: 4.5s; animation-delay: 2.5s;"></div>
+        <div class="ambient-hbond-spark" style="top: 70%; right: 22%; width: 4px; height: 4px; background: #ffb703; box-shadow: 0 0 10px #ffb703; animation-duration: 3.8s; animation-delay: 0.8s;"></div>
+    </div>
+
+    <!-- 3D Canvas Background -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Overlay Header Responsif -->
+    <header id="app-header">
+        <div class="header-content">
+            <div class="header-left">
+                <div class="header-nav-row">
+                    <a href="../index.html" class="header-back-link" title="Kembali ke Beranda GEN-OS">← Beranda</a>
+                    <div class="logo-badge">
+                        <span class="pulse-dot"></span>
+                        <span class="badge-text">GEN-OS 3D BIO-CORE</span>
+                    </div>
+                </div>
+                <h1>STRUKTUR HELIKS GANDA DNA</h1>
+                <p class="subtitle">Eksplorasi Molekuler Interaktif 360° Watson-Crick</p>
+            </div>
+            <!-- Tombol Aksi di Header (Desktop & Mobile) -->
+            <div class="header-actions">
+                <button id="btn-open-tutorial" class="header-btn header-btn-tutorial" title="Buka Panduan Tutorial Interaktif">
+                    <span class="header-btn-icon">💡</span>
+                    <span class="header-btn-text">Tutorial</span>
+                </button>
+                <button id="btn-toggle-controls-panel" class="header-btn" title="Buka Panel Kontrol">
+                    <span class="header-btn-icon">⚙️</span>
+                    <span class="header-btn-text">Menu</span>
+                </button>
+                <button id="btn-toggle-inspector-panel" class="header-btn" title="Buka Detail Molekul">
+                    <span class="header-btn-icon">🔬</span>
+                    <span class="header-btn-text">Detail</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Backdrop Gelap untuk Mobile Drawer & Modal -->
+    <div id="modal-backdrop" class="modal-backdrop hidden"></div>
+
+    <!-- Panel Kontrol Kiri / Bottom Sheet Mobile -->
+    <aside id="controls-panel" class="glass-panel responsive-drawer">
+        <!-- Handle Bar Khusus Sentuhan Mobile -->
+        <div class="mobile-drawer-handle"></div>
+
+        <div class="panel-header-flex">
+            <div class="panel-section-title">
+                <span class="icon">🧬</span> PUSAT KONTROL MOLEKULER
+            </div>
+            <button id="btn-close-controls" class="btn-icon-close" title="Tutup Menu">&times;</button>
+        </div>
+
+        <!-- 1. KONFORMASI ALOTROPIK KRISTALOGRAFI -->
+        <div class="panel-section-title">
+            <span class="icon">🌀</span> BENTUK KONFORMASI ALOTROPIK
+        </div>
+        <p class="section-hint">Standar kristalografi sinar-X (Dickerson &amp; Saenger):</p>
+        <div class="conformation-tabs">
+            <button class="conf-tab-btn active" data-conf="B" id="conf-btn-B" title="B-DNA: Bentuk fisiologis alami seluler">
+                <span class="conf-badge">B-DNA</span>
+                <span class="conf-title">Fisiologis Standar</span>
+                <span class="conf-sub">Kanan • 10.5 pb • ⌀2.0 nm</span>
+            </button>
+            <button class="conf-tab-btn" data-conf="A" id="conf-btn-A" title="A-DNA: Terdehidrasi &amp; hibrida DNA-RNA">
+                <span class="conf-badge">A-DNA</span>
+                <span class="conf-title">Kompak Miring</span>
+                <span class="conf-sub">Kanan • 11.0 pb • Miring 19°</span>
+            </button>
+            <button class="conf-tab-btn" data-conf="Z" id="conf-btn-Z" title="Z-DNA: Heliks kidal bergantian purin-pirimidin">
+                <span class="conf-badge">Z-DNA</span>
+                <span class="conf-title">Heliks Kidal</span>
+                <span class="conf-sub">Kidal • 12.0 pb • Zigzag</span>
+            </button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- 2. MODE REPRESENTASI MOLEKULER -->
+        <div class="panel-section-title">
+            <span class="icon">🔬</span> STANDAR REPRESENTASI ILMIAH
+        </div>
+        <p class="section-hint">Pilih visualisasi setara RCSB PDB &amp; PyMOL:</p>
+        <div class="mode-selector-grid">
+            <button class="mode-btn active" data-mode="bio">
+                <span class="mode-icon">🧪</span>
+                <div class="mode-info">
+                    <span class="mode-name">Bio-Illustrative</span>
+                    <span class="mode-sub">Cincin Planar Purin-Pirimidin &amp; Pita Ribosa</span>
+                </div>
+            </button>
+            <button class="mode-btn" data-mode="cpk">
+                <span class="mode-icon">🔮</span>
+                <div class="mode-info">
+                    <span class="mode-name">CPK Space-Filling</span>
+                    <span class="mode-sub">Permukaan Atomik Padat (Van der Waals)</span>
+                </div>
+            </button>
+            <button class="mode-btn" data-mode="ballstick">
+                <span class="mode-icon">⚛️</span>
+                <div class="mode-info">
+                    <span class="mode-name">Ball &amp; Stick</span>
+                    <span class="mode-sub">Kerangka Ikatan Kimia Kovalen 3D</span>
+                </div>
+            </button>
+            <button class="mode-btn" data-mode="electrostatic">
+                <span class="mode-icon">⚡</span>
+                <div class="mode-info">
+                    <span class="mode-name">Coulombic Surface Map</span>
+                    <span class="mode-sub">Peta Potensial Elektrostatik (- Fosfat vs 0 Basa)</span>
+                </div>
+            </button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- 3. FENOMENA & MODIFIKASI GENETIK -->
+        <div class="panel-section-title">
+            <span class="icon">✨</span> FENOMENA &amp; LESI MOLEKULER
+        </div>
+        <p class="section-hint">Simulasi modifikasi epigenetik &amp; kerusakan UV:</p>
+        <div class="condition-selector-grid">
+            <button class="condition-btn active" data-condition="normal">
+                <span class="cond-icon">🌿</span>
+                <div class="cond-info">
+                    <span class="cond-title">Normal (Heliks Utuh)</span>
+                    <span class="cond-sub">Pasangan Chargaff stabil tanpa lesi</span>
+                </div>
+            </button>
+            <button class="condition-btn" data-condition="methylation">
+                <span class="cond-icon">🧬</span>
+                <div class="cond-info">
+                    <span class="cond-title">Metilasi DNA (5-mC)</span>
+                    <span class="cond-sub">Epigenetik: Gugus -CH₃ di Major Groove</span>
+                </div>
+            </button>
+            <button class="condition-btn" data-condition="thymine_dimer">
+                <span class="cond-icon">☀️</span>
+                <div class="cond-info">
+                    <span class="cond-title">Dimer Timin (Radiasi UV)</span>
+                    <span class="cond-sub">Cincin Siklobutana CPD &amp; Kink 30°</span>
+                </div>
+            </button>
+            <button class="condition-btn" data-condition="intercalation">
+                <span class="cond-icon">💊</span>
+                <div class="cond-info">
+                    <span class="cond-title">Interkalasi Obat Kanker</span>
+                    <span class="cond-sub">Penyisipan planar &amp; Unwinding heliks</span>
+                </div>
+            </button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- 4. SINTESIS SEKUENS NUKLEOTIDA DINAMIS -->
+        <div class="panel-section-title">
+            <span class="icon">⌨️</span> SINTESIS SEKUENS NUKLEOTIDA
+        </div>
+        <p class="section-hint">Rancang rantai basa sendiri (Chargaff komplementer):</p>
+        <div class="seq-input-group">
+            <input type="text" id="dna-seq-input" class="seq-input" value="ATGCGTACCTACGATC" maxlength="24" placeholder="Ketik A, T, G, C..." spellcheck="false" autocomplete="off">
+            <button id="btn-apply-seq" class="seq-apply-btn" title="Rakit Ulang Heliks 3D">Sintesis</button>
+        </div>
+        <div class="seq-preset-chips">
+            <button class="seq-chip active" data-seq="ATGCGTACCTACGATC">Watson-Crick</button>
+            <button class="seq-chip" data-seq="CGCGCGGCCGCGCGCG">CpG Island (GC)</button>
+            <button class="seq-chip" data-seq="TATAAATATAAATATA">TATA Box (AT)</button>
+            <button class="seq-chip" data-seq="CGCGCGCGCGCGCGCG">poly(dG-dC) Z</button>
+        </div>
+        <div class="seq-stats-badge" id="seq-stats-badge">
+            <div class="seq-stat-item"><span class="stat-lbl">Panjang:</span> <b id="stat-len">16 pb</b></div>
+            <div class="seq-stat-item"><span class="stat-lbl">GC:</span> <b id="stat-gc">50.0%</b></div>
+            <div class="seq-stat-item"><span class="stat-lbl">Tₘ:</span> <b id="stat-tm">48.0°C</b></div>
+            <div class="seq-stat-item"><span class="stat-lbl">Ikatan H:</span> <b id="stat-hb">40</b></div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- 5. Dinamika Termal, Solvasi & Skala Metrik Biofisika -->
+        <div class="panel-section-title">
+            <span class="icon">🌡️</span> BIOFISIKA &amp; LINGKUNGAN SEL
+        </div>
+        <p class="section-hint">Parameter dinamis molekul dalam sitoplasma:</p>
+        <div class="toggle-group">
+            <button id="btn-toggle-thermal" class="ctrl-btn active">
+                <span id="thermal-status-icon">🌊</span> Dinamika Termal (37°C): <b id="thermal-status-text">AKTIF</b>
+            </button>
+            <button id="btn-toggle-ions" class="ctrl-btn">
+                <span id="ions-status-icon">💧</span> Solvasi &amp; Ion Lawan (Mg²⁺): <b id="ions-status-text">SEMBUNYI</b>
+            </button>
+            <button id="btn-toggle-metrics" class="ctrl-btn">
+                <span id="metric-status-icon">📐</span> Skala Metrik (nm / Å): <b id="metric-status-text">SEMBUNYI</b>
+            </button>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="panel-section-title">
+            <span class="icon">⚡</span> KONTROL PEMISAHAN
+        </div>
+
+        <!-- Tombol Aksi Utama Pemisahan -->
+        <div class="btn-group-primary">
+            <button id="btn-unzip" class="action-btn btn-neon-blue">
+                <span class="btn-icon">⚡</span>
+                <span class="btn-text">Pisahkan Untai Ganda (Unzip)</span>
+            </button>
+            <button id="btn-explode" class="action-btn btn-neon-purple">
+                <span class="btn-icon">💥</span>
+                <span class="btn-text">Uraikan Per Bagian (Exploded)</span>
+            </button>
+            <button id="btn-reset-assembly" class="action-btn btn-neon-green hidden">
+                <span class="btn-icon">🔄</span>
+                <span class="btn-text">Gabungkan Kembali Heliks</span>
+            </button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Anotasi Ilmiah Seperti Gambar Referensi -->
+        <div class="panel-section-title">
+            <span class="icon">🏷️</span> ANOTASI &amp; LABEL
+        </div>
+        <div class="toggle-group">
+            <button id="btn-toggle-labels" class="ctrl-btn active">
+                <span id="label-status-icon">👁️</span> Label Ilmiah 3D: <b id="label-status-text">TAMPIL</b>
+            </button>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Filter / Isolasi Per Bagian -->
+        <div class="panel-section-title">
+            <span class="icon">🔬</span> ISOLASI KOMPONEN
+        </div>
+        <p class="section-hint">Ketuk untuk menonjolkan bagian tertentu:</p>
+        
+        <div class="filter-chips-scroll">
+            <div class="filter-chips">
+                <button class="chip active" data-filter="all">Semua</button>
+                <button class="chip chip-backbone" data-filter="backbone">Pita Gula-Fosfat</button>
+                <button class="chip chip-adenine" data-filter="A">Adenin (A - Biru)</button>
+                <button class="chip chip-thymine" data-filter="T">Timin (T - Kuning)</button>
+                <button class="chip chip-guanine" data-filter="G">Guanin (G - Hijau)</button>
+                <button class="chip chip-cytosine" data-filter="C">Sitosin (C - Merah)</button>
+                <button class="chip chip-hbond" data-filter="hbond">Ikatan Hidrogen</button>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Kontrol Navigasi & Rotasi -->
+        <div class="panel-section-title">
+            <span class="icon">🎥</span> NAVIGASI KAMERA
+        </div>
+        <div class="camera-controls">
+            <button id="btn-toggle-rotate" class="ctrl-btn active">
+                <span id="rotate-status-icon">🔄</span> Rotasi Otomatis: <b id="rotate-status-label">AKTIF</b>
+            </button>
+            <button id="btn-reset-camera" class="ctrl-btn">
+                <span>🎯</span> Reset Sudut Pandang Awal
+            </button>
+        </div>
+
+        <!-- Legenda Basa Nitrogen & Klasifikasi Kimia -->
+        <div class="legend-box">
+            <div class="legend-title">LEGENDA &amp; KLASIFIKASI BIOKIMIA</div>
+            <div class="legend-grid">
+                <div class="legend-item"><span class="color-dot dot-a"></span> <b>A</b> Adenin (Purin: 2 Cincin)</div>
+                <div class="legend-item"><span class="color-dot dot-t"></span> <b>T</b> Timin (Pirimidin: 1 Cincin)</div>
+                <div class="legend-item"><span class="color-dot dot-g"></span> <b>G</b> Guanin (Purin: 2 Cincin)</div>
+                <div class="legend-item"><span class="color-dot dot-c"></span> <b>C</b> Sitosin (Pirimidin: 1 Cincin)</div>
+                <div class="legend-item"><span class="color-dot dot-backbone"></span> <b>P-S</b> Gula Deoksiribosa-Fosfat</div>
+                <div class="legend-item"><span class="color-dot dot-hbond"></span> <b>···</b> Ikatan Hidrogen (A=T, G≡C)</div>
+                <div class="legend-item"><span class="color-dot dot-methyl"></span> <b>-CH₃</b> Metilasi Epigenetik (5-mC)</div>
+                <div class="legend-item"><span class="color-dot dot-dimer"></span> <b>CPD</b> Dimer Timin Fotoproduk UV</div>
+                <div class="legend-item"><span class="color-dot dot-intercalator"></span> <b>Drug</b> Interkalasi Kemoterapi</div>
+                <div class="legend-item"><span class="color-dot dot-ion"></span> <b>Mg²⁺</b> Ion Lawan &amp; Air Solvasi</div>
+            </div>
+            <div class="legend-polarity-row">
+                <div class="polarity-chip"><b>5'</b> Fosfat Bebas</div>
+                <div class="polarity-arrow">⇄</div>
+                <div class="polarity-chip"><b>3'</b> -OH Bebas (Antiparalel)</div>
+            </div>
+            <div class="legend-cpk-row" id="legend-cpk-row">
+                <span class="cpk-label">Standar CPK:</span>
+                <span class="cpk-item"><i style="background:#3b4252;"></i>C</span>
+                <span class="cpk-item"><i style="background:#1d4ed8;"></i>N</span>
+                <span class="cpk-item"><i style="background:#dc2626;"></i>O</span>
+                <span class="cpk-item"><i style="background:#d97706;"></i>P</span>
+                <span class="cpk-item"><i style="background:#e2e8f0;"></i>H</span>
+            </div>
+            <div class="legend-electro-row hidden" id="legend-electro-row">
+                <span class="electro-label">Potensial Coulomb:</span>
+                <span class="electro-bar"></span>
+                <span class="electro-tags"><span>-1e (Fosfat)</span><span>0 (Netral)</span><span>+1e (Amino)</span></span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Panel Inspektur Detail Molekuler Kanan / Bottom Sheet Mobile -->
+    <aside id="inspector-panel" class="glass-panel responsive-drawer">
+        <!-- Handle Bar Khusus Sentuhan Mobile -->
+        <div class="mobile-drawer-handle"></div>
+
+        <div class="panel-header-inspector">
+            <div class="inspector-badge" id="inspector-badge">INSPEKTOR MOLEKUL</div>
+            <button id="btn-close-inspector" class="btn-icon-close" title="Tutup">&times;</button>
+        </div>
+
+        <div id="inspector-placeholder" class="inspector-empty">
+            <div class="microscope-icon">🔬</div>
+            <h3>PILIH KOMPONEN DNA</h3>
+            <p>Ketuk salah satu basa nitrogen (A, T, G, C), ikatan hidrogen, atau pita tulang punggung untuk menginspeksi rumus kimia dan fungsinya.</p>
+        </div>
+
+        <div id="inspector-details" class="hidden">
+            <div class="component-header">
+                <div class="component-color-indicator" id="detail-color-indicator"></div>
+                <div>
+                    <h2 id="detail-title">Nama Bagian</h2>
+                    <span id="detail-class" class="meta-tag">Klasifikasi Kimia</span>
+                </div>
+            </div>
+
+            <div class="detail-card">
+                <div class="detail-row">
+                    <span class="label">Rumus Molekul:</span>
+                    <span class="value code-font" id="detail-formula">C₅H₅N₅</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Berat Molekul:</span>
+                    <span class="value" id="detail-weight">135.13 g/mol</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Pasangan Komplementer:</span>
+                    <span class="value highlight-text" id="detail-partner">Timin (T)</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Jembatan Hidrogen:</span>
+                    <span class="value" id="detail-bonds">2 Titik Ikatan</span>
+                </div>
+            </div>
+
+            <div class="detail-section">
+                <h4>DESKRIPSI & PERAN STRUKTURAL</h4>
+                <p id="detail-desc">Penjelasan mengenai bagian ini.</p>
+            </div>
+
+            <div class="detail-section">
+                <h4>SIGNIFIKANSI GENETIKA</h4>
+                <p id="detail-function">Peran penting dalam stabilitas heliks dan replikasi.</p>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Overlay Anotasi Ilmiah 3D (Seperti di Gambar) -->
+    <div id="annotations-overlay">
+        <div class="annotation-callout callout-major-1" id="callout-major-1">
+            <div class="bracket-bracket"></div>
+            <div class="callout-text">Major Groove<br><b>(Lekukan Mayor ~2.2 nm)</b></div>
+        </div>
+        <div class="annotation-callout callout-minor-1" id="callout-minor-1">
+            <div class="bracket-bracket"></div>
+            <div class="callout-text">Minor Groove<br><b>(Lekukan Minor ~1.2 nm)</b></div>
+        </div>
+        <div class="annotation-callout callout-backbone" id="callout-backbone">
+            <div class="callout-pointer"></div>
+            <div class="callout-text">Sugar-Phosphate<br>Backbone</div>
+        </div>
+        <div class="annotation-callout callout-at" id="callout-at">
+            <div class="callout-pointer"></div>
+            <div class="callout-text">Hydrogen Bonds<br><b>A-T Base Pair</b> (2 Ikatan)</div>
+        </div>
+        <div class="annotation-callout callout-cg" id="callout-cg">
+            <div class="callout-pointer"></div>
+            <div class="callout-text">Hydrogen Bonds<br><b>C-G Base Pair</b> (3 Ikatan)</div>
+        </div>
+
+        <!-- Anotasi Skala Metrik Ilmiah (Dapat di-toggle) -->
+        <div class="annotation-callout callout-metric hidden" id="callout-metric-diameter">
+            <div class="metric-ruler-line horizontal"></div>
+            <div class="callout-text metric-badge">⌀ Diameter Heliks: <b>2.0 nm (20 Å)</b></div>
+        </div>
+        <div class="annotation-callout callout-metric hidden" id="callout-metric-rise">
+            <div class="metric-ruler-line vertical"></div>
+            <div class="callout-text metric-badge">↕ Jarak Pasang Basa (Rise): <b>0.34 nm (3.4 Å)</b></div>
+        </div>
+        <div class="annotation-callout callout-metric hidden" id="callout-metric-pitch">
+            <div class="bracket-bracket metric-bracket"></div>
+            <div class="callout-text metric-badge">↻ 1 Putaran Penuh (Pitch): <b>3.4 nm (10.5 pb)</b></div>
+        </div>
+
+        <!-- Penanda Polaritas Antiparalel 5' dan 3' (Ujung Untai) -->
+        <div class="annotation-callout callout-polarity" id="callout-pol-s1-top">
+            <span class="polarity-badge badge-5p">5'</span>
+            <div class="callout-text">Untai 1 (Fosfat)</div>
+        </div>
+        <div class="annotation-callout callout-polarity" id="callout-pol-s1-bottom">
+            <span class="polarity-badge badge-3p">3'</span>
+            <div class="callout-text">Untai 1 (-OH)</div>
+        </div>
+        <div class="annotation-callout callout-polarity" id="callout-pol-s2-top">
+            <span class="polarity-badge badge-3p">3'</span>
+            <div class="callout-text">Untai 2 (-OH)</div>
+        </div>
+        <div class="annotation-callout callout-polarity" id="callout-pol-s2-bottom">
+            <span class="polarity-badge badge-5p">5'</span>
+            <div class="callout-text">Untai 2 (Fosfat)</div>
+        </div>
+    </div>
+
+    <!-- Mobile Floating Quick Action Dock (Bawah) -->
+    <nav id="mobile-dock" class="mobile-dock-container">
+        <button id="dock-btn-unzip" class="dock-btn">
+            <span class="dock-icon">⚡</span>
+            <span class="dock-label">Pisahkan</span>
+        </button>
+        <button id="dock-btn-explode" class="dock-btn">
+            <span class="dock-icon">💥</span>
+            <span class="dock-label">Uraikan</span>
+        </button>
+        <button id="dock-btn-reset" class="dock-btn hidden">
+            <span class="dock-icon">🔄</span>
+            <span class="dock-label">Satukan</span>
+        </button>
+        <button id="dock-btn-menu" class="dock-btn dock-btn-primary">
+            <span class="dock-icon">⚙️</span>
+            <span class="dock-label">Menu</span>
+        </button>
+        <button id="dock-btn-inspect" class="dock-btn">
+            <span class="dock-icon">🔬</span>
+            <span class="dock-label">Detail</span>
+        </button>
+    </nav>
+
+    <!-- Petunjuk Navigasi Desktop -->
+    <footer id="interaction-hint">
+        <div class="hint-pill">
+            <span class="hint-icon">🖱️</span>
+            <span><b>Klik / Sentuh & Geser:</b> Rotasi 360°</span>
+            <span class="hint-divider">|</span>
+            <span><b>Pinch / Scroll:</b> Zoom</span>
+            <span class="hint-divider">|</span>
+            <span><b>Ketuk Objek:</b> Inspeksi Molekul</span>
+        </div>
+    </footer>
+
+    <!-- Modal Tutorial Edukasi Interaktif 3D -->
+    <div id="tutorial-modal" class="tutorial-modal-overlay hidden">
+        <div class="tutorial-card glass-panel">
+            <div class="tutorial-header">
+                <div class="tutorial-badge-row">
+                    <span class="pulse-dot"></span>
+                    <span class="tutorial-badge">PANDUAN EKSPLORASI DNA 3D // WATSON-CRICK</span>
+                </div>
+                <button id="btn-close-tutorial" class="btn-icon-close" title="Tutup Tutorial">&times;</button>
+            </div>
+
+            <div class="tutorial-body">
+                <!-- Slide 1 -->
+                <div class="tutorial-slide active" data-slide="1">
+                    <div class="tut-icon-banner">🧬</div>
+                    <h3 class="tut-slide-title">1. Arsitektur Heliks Ganda B-DNA Asli</h3>
+                    <p class="tut-slide-lead">Struktur materi genetik utama dirumuskan oleh James Watson dan Francis Crick (1953) berdasarkan data kristalografi sinar-X Foto 51 karya Rosalind Franklin &amp; Raymond Gosling.</p>
+                    <div class="tut-grid">
+                        <div class="tut-box">
+                            <span class="tut-box-icon">📐</span>
+                            <b>Dimensi Metrik Presisi:</b>
+                            <p>Diameter heliks <b>2.0 nm (20 Å)</b>, jarak antar pasang basa (rise) <b>0.34 nm (3.4 Å)</b>, dan satu putaran (pitch) <b>3.4 nm (~10.5 pb)</b>.</p>
+                        </div>
+                        <div class="tut-box">
+                            <span class="tut-box-icon">🌀</span>
+                            <b>Lekukan Mayor &amp; Minor:</b>
+                            <p>Asimetri sudut heliks menciptakan <b>Major Groove (~2.2 nm)</b> yang kaya kode kimiawi faktor transkripsi dan <b>Minor Groove (~1.2 nm)</b>.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 2 -->
+                <div class="tutorial-slide hidden" data-slide="2">
+                    <div class="tut-icon-banner">🌀</div>
+                    <h3 class="tut-slide-title">2. Tiga Bentuk Alotropik: B-DNA, A-DNA &amp; Z-DNA</h3>
+                    <p class="tut-slide-lead">Kristalografi membuktikan DNA dapat bertransisi konformasi bergantung pada tingkat hidrasi dan sekuens basa (Dickerson et al., 1982; Saenger, 1984).</p>
+                    <div class="tut-grid">
+                        <div class="tut-box">
+                            <span class="tut-box-icon">💧</span>
+                            <b>B-DNA (Fisiologis):</b>
+                            <p>Bentuk alami dalam larutan berair sel. Heliks kanan, 10.5 pb/putaran, pasangan basa tegak lurus sumbu.</p>
+                        </div>
+                        <div class="tut-box">
+                            <span class="tut-box-icon">🏜️</span>
+                            <b>A-DNA (Terdehidrasi / RNA-DNA):</b>
+                            <p>Bentuk lebih pendek dan lebar (⌀2.3 nm, 11 pb/putaran) dengan pasangan basa <b>miring 19°</b> dan rongga aksial tengah.</p>
+                        </div>
+                        <div class="tut-box tut-box-wide">
+                            <span class="tut-box-icon">⚡</span>
+                            <b>Z-DNA (Heliks Kidal Zigzag):</b>
+                            <p>Terbentuk pada pengulangan purin-pirimidin (d(CG)ₙ). Berputar <b>ke arah kiri (*left-handed*)</b>, diameter ramping 1.8 nm, 12 pb/putaran, dengan tulang punggung zigzag!</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 3 -->
+                <div class="tutorial-slide hidden" data-slide="3">
+                    <div class="tut-icon-banner">🧪</div>
+                    <h3 class="tut-slide-title">3. Basa Nitrogen, Komplementer Chargaff &amp; Tₘ</h3>
+                    <p class="tut-slide-lead">Kestabilan dan kerapian diameter DNA dijaga oleh penggabungan purin (A, G) dan pirimidin (T, C) sesuai Hukum Chargaff.</p>
+                    <div class="tut-grid">
+                        <div class="tut-box">
+                            <span class="tut-box-icon">💎</span>
+                            <b>Purin (A, G) vs Pirimidin (T, C):</b>
+                            <p><b>Adenin &amp; Guanin</b> memiliki 2 cincin terpadu (cincin 6 + 5), sedangkan <b>Timin &amp; Sitosin</b> memiliki 1 cincin heksagonal tunggal.</p>
+                        </div>
+                        <div class="tut-box">
+                            <span class="tut-box-icon">🔗</span>
+                            <b>2 Ikatan (A=T) vs 3 Ikatan (G≡C):</b>
+                            <p>Pasangan G≡C memiliki 3 ikatan hidrogen, memberikan kekuatan termodinamika lebih tinggi dan menaikkan titik leleh ($T_m$).</p>
+                        </div>
+                        <div class="tut-box tut-box-wide">
+                            <span class="tut-box-icon">⌨️</span>
+                            <b>Sintesis Sekuens Kustom:</b>
+                            <p>Gunakan bar input untuk mengetik urutan basa sendiri atau memilih preset (Watson-Crick, CpG Island, TATA Box) untuk melihat metriknya secara langsung.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 4 -->
+                <div class="tutorial-slide hidden" data-slide="4">
+                    <div class="tut-icon-banner">✨</div>
+                    <h3 class="tut-slide-title">4. Fenomena Molekuler: Epigenetika, UV &amp; Obat</h3>
+                    <p class="tut-slide-lead">Simulasi ini memungkinkan pengamatan modifikasi kimiawi riil yang memengaruhi ekspresi gen dan kesehatan selular:</p>
+                    <div class="tut-grid">
+                        <div class="tut-box">
+                            <span class="tut-box-icon">🧬</span>
+                            <b>Metilasi DNA (5-mC):</b>
+                            <p>Penambahan gugus metil (<b>-CH₃</b>) pada C5 Sitosin menonjol di lekukan mayor, membungkam ekspresi gen (*epigenetic silencing*).</p>
+                        </div>
+                        <div class="tut-box">
+                            <span class="tut-box-icon">☀️</span>
+                            <b>Dimer Timin (Radiasi UV):</b>
+                            <p>Foton ultraviolet membentuk cincin siklobutana kovalen antara dua timin, memicu <b>tekukan/kink ~30°</b> penyebab kanker kulit.</p>
+                        </div>
+                        <div class="tut-box tut-box-wide">
+                            <span class="tut-box-icon">💊</span>
+                            <b>Interkalasi Obat Kanker (Kemoterapi):</b>
+                            <p>Molekul planar menyisip di antara tumpukan basa (*pi-pi stacking*), merenggangkan heliks hingga 2x lipat dan melumpuhkan replikasi sel kanker.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 5 -->
+                <div class="tutorial-slide hidden" data-slide="5">
+                    <div class="tut-icon-banner">🔬</div>
+                    <h3 class="tut-slide-title">5. Visualisasi Riset, Potensial Coulomb &amp; Solvasi</h3>
+                    <p class="tut-slide-lead">Standar visualisasi perangkat lunak kristalografi dan dinamika molekuler riset (PyMOL, ChimeraX, GROMACS):</p>
+                    <div class="tut-grid">
+                        <div class="tut-box">
+                            <span class="tut-box-icon">⚡</span>
+                            <b>Peta Potensial Coulomb:</b>
+                            <p>Warna merah pekat pada tulang punggung fosfat (muatan negatif kuat $-1e$), dan netral di inti basa hidrofobik.</p>
+                        </div>
+                        <div class="tut-box">
+                            <span class="tut-box-icon">💧</span>
+                            <b>Solvasi &amp; Ion Lawan (Mg²⁺):</b>
+                            <p>Kation magnesium pelindung mengelilingi gugus fosfat dan pita air (*spine of hydration*) di lekukan minor menjaga heliks agar tidak kolaps.</p>
+                        </div>
+                        <div class="tut-box tut-box-wide">
+                            <span class="tut-box-icon">🎮</span>
+                            <b>Kontrol Interaktif:</b>
+                            <p>Ketuk komponen apa pun untuk menginspeksi rumus kimia dan fungsinya. Gunakan <b>Unzip</b> untuk membelah untai dan <b>Dinamika Termal (37°C)</b> untuk vibrasi Brownian.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tutorial-footer">
+                <div class="tutorial-dots">
+                    <span class="dot active" data-index="1"></span>
+                    <span class="dot" data-index="2"></span>
+                    <span class="dot" data-index="3"></span>
+                    <span class="dot" data-index="4"></span>
+                    <span class="dot" data-index="5"></span>
+                </div>
+                <div class="tutorial-nav-btns">
+                    <button id="tutorial-btn-prev" class="tut-nav-btn secondary" disabled>Sebelumnya</button>
+                    <button id="tutorial-btn-next" class="tut-nav-btn primary">Lanjut →</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Three.js & OrbitControls via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        if (typeof THREE !== 'undefined' && !THREE.OrbitControls) {
+            document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/controls/OrbitControls.min.js"><\/script>');
+        }
+    </script>
+    
+    <!-- Script Logika 3D Realistis & Adaptif Multi-Device -->
+    <script src="script.js"></script>
+</body>
+</html>
